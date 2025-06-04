@@ -125,8 +125,8 @@ class MqttService {
       final MqttPublishMessage recMess = c[0].payload as MqttPublishMessage;
       final message = MqttPublishPayload.bytesToStringAsString(recMess.payload.message);
       
-      print('📨 NEW MESSAGE from ${c[0].topic}:');
-      print('📝 Content: $message');
+      // print('📨 NEW MESSAGE from ${c[0].topic}:');
+      // print('📝 Content: $message');
       
       try {
         var data = json.decode(message) as Map<String, dynamic>;
@@ -147,8 +147,8 @@ class MqttService {
 
   // ENHANCED: Convert pump control command to status format
   Map<String, dynamic> _convertControlToStatus(Map<String, dynamic> controlData) {
-    print('🔄 Converting pump control to status format...');
-    print('🔄 Original: $controlData');
+    // print('🔄 Converting pump control to status format...');
+    // print('🔄 Original: $controlData');
     
     // Extract the action and convert to is_active
     bool isActive = false;
@@ -167,7 +167,7 @@ class MqttService {
       'topic': _pumpStatusTopic, // Change topic to status topic
     };
     
-    print('🔄 Converted: $statusData');
+    // print('🔄 Converted: $statusData');
     return statusData;
   }
 
@@ -184,12 +184,12 @@ class MqttService {
   Future<bool> publishMessage(String topic, String message) async {
     try {
       if (!isConnected) {
-        print('❌ Cannot publish - MQTT not connected');
+        // print('❌ Cannot publish - MQTT not connected');
         throw Exception('MQTT not connected. Current state: $connectionState');
       }
 
-      print('📤 Publishing message to topic: $topic');
-      print('📝 Message content: $message');
+      // print('📤 Publishing message to topic: $topic');
+      // print('📝 Message content: $message');
 
       final MqttClientPayloadBuilder builder = MqttClientPayloadBuilder();
       builder.addString(message);
@@ -228,7 +228,7 @@ class MqttService {
       };
 
       final controlJson = json.encode(controlMessage);
-      print('🚰 [CONTROL] Sending pump control command...');
+      // print('🚰 [CONTROL] Sending pump control command...');
       bool controlSuccess = await publishMessage(_pumpControlTopic, controlJson);
       
       // 2. ENHANCED: Also send status message (provider-friendly format)
@@ -242,15 +242,15 @@ class MqttService {
       };
 
       final statusJson = json.encode(statusMessage);
-      print('🚰 [STATUS] Sending pump status update...');
+      // print('🚰 [STATUS] Sending pump status update...');
       bool statusSuccess = await publishMessage(_pumpStatusTopic, statusJson);
       
       if (controlSuccess && statusSuccess) {
-        print('🚰 Pump control sent successfully: ${activate ? "ON" : "OFF"}');
-        print('✅ Both control and status messages published');
+        // print('🚰 Pump control sent successfully: ${activate ? "ON" : "OFF"}');
+        // print('✅ Both control and status messages published');
         return true;
       } else {
-        print('⚠️ Partial success - Control: $controlSuccess, Status: $statusSuccess');
+        // print('⚠️ Partial success - Control: $controlSuccess, Status: $statusSuccess');
         return controlSuccess || statusSuccess; // At least one succeeded
       }
       
@@ -264,7 +264,7 @@ class MqttService {
   Future<bool> publishSensorData(Map<String, dynamic> sensorData) async {
     try {
       if (!isConnected) {
-        print('❌ Cannot publish sensor data - MQTT not connected');
+        // print('❌ Cannot publish sensor data - MQTT not connected');
         return false;
       }
 
@@ -435,81 +435,81 @@ class MqttService {
   }
 
   // ENHANCED: Test method untuk pump dengan format baru
-  Future<bool> testPumpControl() async {
-    try {
-      if (!isConnected) {
-        print('❌ Cannot test pump control - not connected');
-        return false;
-      }
+  // Future<bool> testPumpControl() async {
+  //   try {
+  //     if (!isConnected) {
+  //       print('❌ Cannot test pump control - not connected');
+  //       return false;
+  //     }
 
-      print('🧪 Testing pump control with dual publish...');
+  //     print('🧪 Testing pump control with dual publish...');
       
-      // Test ON
-      bool onResult = await controlPump(true);
-      await Future.delayed(Duration(seconds: 2));
+  //     // Test ON
+  //     bool onResult = await controlPump(true);
+  //     await Future.delayed(Duration(seconds: 2));
       
-      // Test OFF
-      bool offResult = await controlPump(false);
+  //     // Test OFF
+  //     bool offResult = await controlPump(false);
       
-      print('🧪 Test results - ON: $onResult, OFF: $offResult');
-      return onResult && offResult;
+  //     print('🧪 Test results - ON: $onResult, OFF: $offResult');
+  //     return onResult && offResult;
       
-    } catch (e) {
-      print('❌ Error in pump test: $e');
-      return false;
-    }
-  }
+  //   } catch (e) {
+  //     print('❌ Error in pump test: $e');
+  //     return false;
+  //   }
+  // }
 
   // ENHANCED: Test method untuk sensor data
-  Future<bool> testSensorData() async {
-    try {
-      if (!isConnected) {
-        print('❌ Cannot test sensor data - not connected');
-        return false;
-      }
+  // Future<bool> testSensorData() async {
+  //   try {
+  //     if (!isConnected) {
+  //       print('❌ Cannot test sensor data - not connected');
+  //       return false;
+  //     }
 
-      final testSensorData = {
-        'soil_humidity': 65.5,
-        'sensor_id': 'test_sensor',
-        'location': 'greenhouse_test',
-      };
+  //     final testSensorData = {
+  //       'soil_humidity': 65.5,
+  //       'sensor_id': 'test_sensor',
+  //       'location': 'greenhouse_test',
+  //     };
 
-      return await publishSensorData(testSensorData);
+  //     // return await publishSensorData(testSensorData);
       
-    } catch (e) {
-      print('❌ Error testing sensor data: $e');
-      return false;
-    }
-  }
+  //   } catch (e) {
+  //     print('❌ Error testing sensor data: $e');
+  //     return false;
+  //   }
+  // }
 
   // ===========================================
   // EXISTING METHODS (KEPT FOR COMPATIBILITY)
   // ===========================================
 
   // Generic publish message method (private - untuk internal use)
-  void _publishMessage(String topic, String message) {
-    final MqttClientPayloadBuilder builder = MqttClientPayloadBuilder();
-    builder.addString(message);
+  // void _publishMessage(String topic, String message) {
+  //   final MqttClientPayloadBuilder builder = MqttClientPayloadBuilder();
+  //   builder.addString(message);
 
-    print('📤 Publishing message "$message" to topic $topic');
-    client.publishMessage(topic, MqttQos.exactlyOnce, builder.payload!);
-  }
+  //   print('📤 Publishing message "$message" to topic $topic');
+  //   client.publishMessage(topic, MqttQos.exactlyOnce, builder.payload!);
+  // }
 
   // Test publish method (original)
-  Future<void> testPublish() async {
-    if (!isConnected) {
-      print('❌ Cannot test publish - not connected');
-      return;
-    }
+  // Future<void> testPublish() async {
+  //   if (!isConnected) {
+  //     print('❌ Cannot test publish - not connected');
+  //     return;
+  //   }
 
-    final testMessage = {
-      'test': true,
-      'timestamp': DateTime.now().toIso8601String(),
-      'source': 'flutter_app_test'
-    };
+  //   final testMessage = {
+  //     'test': true,
+  //     'timestamp': DateTime.now().toIso8601String(),
+  //     'source': 'flutter_app_test'
+  //   };
 
-    _publishMessage('test/flutter', json.encode(testMessage));
-  }
+  //   _publishMessage('test/flutter', json.encode(testMessage));
+  // }
 
   // Callback methods
   void _onSubscribed(String topic) {
@@ -542,57 +542,59 @@ class MqttService {
   }
 
   // Simple connection test method
-  static Future<bool> testConnection() async {
-    try {
-      print('\n🧪 === TESTING HIVEMQ CONNECTION (OFFICIAL METHOD) ===');
+  // static Future<bool> testConnection() async {
+  //   try {
+  //     print('\n🧪 === TESTING HIVEMQ CONNECTION (OFFICIAL METHOD) ===');
       
-      final testClientId = 'test_${DateTime.now().millisecondsSinceEpoch}';
-      final testClient = MqttServerClient.withPort(_broker, testClientId, _port);
+  //     final testClientId = 'test_${DateTime.now().millisecondsSinceEpoch}';
+  //     final testClient = MqttServerClient.withPort(_broker, testClientId, _port);
       
-      // Setup exactly like HiveMQ documentation
-      testClient.secure = true;
-      testClient.securityContext = SecurityContext.defaultContext;
-      testClient.keepAlivePeriod = 20;
-      testClient.logging(on: true);
+  //     // Setup exactly like HiveMQ documentation
+  //     testClient.secure = true;
+  //     testClient.securityContext = SecurityContext.defaultContext;
+  //     testClient.keepAlivePeriod = 20;
+  //     testClient.logging(on: true);
       
-      bool connected = false;
-      testClient.onConnected = () {
-        print('✅ Test connection successful');
-        connected = true;
-      };
+  //     bool connected = false;
+  //     testClient.onConnected = () {
+  //       print('✅ Test connection successful');
+  //       connected = true;
+  //     };
       
-      testClient.onDisconnected = () {
-        print('🔌 Test client disconnected');
-      };
+  //     testClient.onDisconnected = () {
+  //       print('🔌 Test client disconnected');
+  //     };
 
-      print('📡 Testing connection to $_broker:$_port');
-      print('👤 Using credentials: $_username / $_password');
-      print('🆔 Test Client ID: $testClientId');
+  //     print('📡 Testing connection to $_broker:$_port');
+  //     print('👤 Using credentials: $_username / $_password');
+  //     print('🆔 Test Client ID: $testClientId');
       
-      // Connect using the official HiveMQ method
-      await testClient.connect(_username, _password);
+  //     // Connect using the official HiveMQ method
+  //     await testClient.connect(_username, _password);
       
-      if (testClient.connectionStatus!.state == MqttConnectionState.connected) {
-        print('✅ OFFICIAL METHOD TEST: SUCCESS');
+  //     if (testClient.connectionStatus!.state == MqttConnectionState.connected) {
+  //       print('✅ OFFICIAL METHOD TEST: SUCCESS');
         
-        // Test publish
-        final builder = MqttClientPayloadBuilder();
-        builder.addString('Test message from official method');
-        testClient.publishMessage('test/official', MqttQos.exactlyOnce, builder.payload!);
-        print('📤 Test message published');
+  //       // Test publish
+  //       final builder = MqttClientPayloadBuilder();
+  //       builder.addString('Test message from official method');
+  //       testClient.publishMessage('test/official', MqttQos.exactlyOnce, builder.payload!);
+  //       print('📤 Test message published');
         
-        await Future.delayed(Duration(seconds: 2));
-        testClient.disconnect();
-        return true;
-      } else {
-        print('❌ OFFICIAL METHOD TEST: FAILED');
-        print('Status: ${testClient.connectionStatus}');
-        return false;
-      }
-    } catch (e, stackTrace) {
-      print('❌ OFFICIAL METHOD ERROR: $e');
-      print('Stack: $stackTrace');
-      return false;
-    }
-  }
+  //       await Future.delayed(Duration(seconds: 2));
+  //       testClient.disconnect();
+  //       return true;
+  //     } else {
+  //       print('❌ OFFICIAL METHOD TEST: FAILED');
+  //       print('Status: ${testClient.connectionStatus}');
+  //       return false;
+  //     }
+  //   } catch (e, stackTrace) {
+  //     print('❌ OFFICIAL METHOD ERROR: $e');
+  //     print('Stack: $stackTrace');
+  //     return false;
+  //   }
+  // }
+
+  
 }
