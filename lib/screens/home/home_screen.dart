@@ -1,12 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'dart:async';
-import 'dart:math';
-import 'dart:convert';
-import '../../core/constants/app_colors.dart';
-import '../../core/constants/app_strings.dart';
-import '../../widgets/common/custom_card.dart';
-import '../../widgets/common/sensor_card.dart';
-import '../../services/mqtt_service.dart';
+import '../../providers/greenhouse_provider.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({Key? key}) : super(key: key);
@@ -16,170 +11,55 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final MqttService _mqttService = MqttService();
-  late StreamSubscription _mqttSubscription;
   Timer? _autoRefreshTimer;
   bool _isRefreshing = false;
   
-  // Soil sensor data variables - DEFAULT TO 0
-  double _soilTemperature = 0.0; // Changed from 0 to 0.0 for clarity
-  bool _isConnected = false;
-  String _lastUpdate = 'Never';
-  
   // Weather data (static)
-  double _weatherTemperature = 40.0;
-  String _weatherCondition = 'Sunny';
-  int _weatherHumidity = 45; // Weather humidity (not soil)
+  final double _weatherTemperature = 40.0;
+  final String _weatherCondition = 'Sunny';
+  final int _weatherHumidity = 45;
   
-  // Temperature limits and alarms
-  // double _upperLimit = 24.0;
-  // double _upperAlarm = 30.0;
-  // double _lowerLimit = 4.0;
-  // double _lowerAlarm = 1.0;
-  
-  // 24-hour min/max tracking - Start with 0 when no data
-  double _maxTemp24h = 0.0;
-  double _minTemp24h = 0.0;
+  // 24-hour min/max tracking
+  double _maxHumidity24h = 0.0;
+  double _minHumidity24h = 100.0;
 
   @override
   void initState() {
     super.initState();
-    _initializeMqtt();
-    // _setupAutoRefresh();
+    _setupAutoRefresh();
   }
 
   void _setupAutoRefresh() {
     // Auto refresh every 30 seconds
     _autoRefreshTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
-      if (mounted && !_isRefreshing) {
-        _autoRefreshMqtt();
+      if (mounted) {
+        context.read<GreenhouseProvider>().refreshData();
       }
     });
   }
 
-  Future<void> _autoRefreshMqtt() async {    
-    // Check if connection is still active
-    if (!_isConnected) {
-      await _initializeMqtt();
-    }
-    
-    // Update last check time
-    final now = DateTime.now();
-    if (mounted) {
-      setState(() {
-        _lastUpdate = '${_formatHour(now.hour)}:${_formatMinute(now.minute)}';
-      });
-    }
-  }
-
-  Future<void> _initializeMqtt() async {
-    try {
-      // Connect to MQTT
-      bool connected = await _mqttService.prepareMqttClient();
-      
-      if (mounted) {
-        setState(() {
-          _isConnected = connected;
-        });
+  void _updateMinMaxHumidity(double humidity) {
+    if (humidity > 0) {
+      if (_maxHumidity24h == 0.0 || humidity > _maxHumidity24h) {
+        _maxHumidity24h = humidity;
       }
-      
-      if (connected) {
-        // Cancel existing subscription if any
-        try {
-          await _mqttSubscription.cancel();
-        } catch (e) {
-          // Ignore error if subscription doesn't exist
-        }
-        
-        // Listen to MQTT data stream
-        _mqttSubscription = _mqttService.dataStream.listen(
-          _handleMqttData,
-          onError: (error) {
-            print('❌ MQTT Stream Error: $error');
-            if (mounted) {
-              setState(() {
-                _isConnected = false;
-              });
-            }
-          },
-        );
-        
-        print('✅ MQTT initialized successfully');
-      } else {
-        print('❌ Failed to connect to MQTT');
-      }
-    } catch (e) {
-      print('❌ Error initializing MQTT: $e');
-      if (mounted) {
-        setState(() {
-          _isConnected = false;
-        });
-      }
-    }
-  }
-
-  void _handleMqttData(Map<String, dynamic> data) {
-    print('📨 Received MQTT data: $data');
-    
-    if (!mounted) return;
-    
-    final topic = data['topic'] as String?;
-    final now = DateTime.now();
-    
-    setState(() {
-      _lastUpdate = '${_formatHour(now.hour)}:${_formatMinute(now.minute)}';
-    });
-    
-    // Handle ONLY soil sensor data
-    if (topic == 'greenhouse/sensors/soil' || 
-        topic == 'greenhouse/sensors/data' ||
-        topic == 'greenhouse/control/pump') {
-      setState(() {
-        // Update ONLY soil temperature from MQTT
-        if (data['soil_temperature'] != null) {
-          _soilTemperature = (data['soil_temperature'] as num).toDouble();
-          _updateMinMaxTemperature(_soilTemperature);
-          print('🌡️ Soil temperature updated: $_soilTemperature°C');
-        }
-        // Also check for temperature field (alternative naming)
-        else if (data['temperature'] != null) {
-          _soilTemperature = (data['temperature'] as num).toDouble();
-          _updateMinMaxTemperature(_soilTemperature);
-          print('🌡️ Soil temperature updated: $_soilTemperature°C');
-        }
-      });
-    }
-  }
-
-  void _updateMinMaxTemperature(double temperature) {
-    // Only update min/max if we have real data (not 0)
-    if (temperature > 0) {
-      if (_maxTemp24h == 0.0 || temperature > _maxTemp24h) {
-        _maxTemp24h = temperature;
-      }
-      if (_minTemp24h == 0.0 || temperature < _minTemp24h) {
-        _minTemp24h = temperature;
+      if (_minHumidity24h == 100.0 || humidity < _minHumidity24h) {
+        _minHumidity24h = humidity;
       }
     }
   }
 
   // Manual refresh function
   Future<void> _refreshData() async {
-    if (_isRefreshing) return; // Prevent multiple simultaneous refreshes
+    if (_isRefreshing) return;
     
     setState(() {
       _isRefreshing = true;
     });
     
     try {
-      await _initializeMqtt();
-      
-      // Test publish to trigger sensor response
-      if (_isConnected) {
-        await _mqttService.testPublishWithConfirmation();
-      }
-      
-      _showSnackBar('🔄 Data refreshed manually');
+      await context.read<GreenhouseProvider>().refreshData();
+      _showSnackBar('🔄 Data refreshed successfully');
     } catch (e) {
       _showSnackBar('❌ Refresh failed: $e');
     } finally {
@@ -203,517 +83,556 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     _autoRefreshTimer?.cancel();
-    _mqttSubscription.cancel();
-    _mqttService.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final screenHeight = MediaQuery.of(context).size.height;
-    final screenWidth = MediaQuery.of(context).size.width;
-    
-    // Get current date and time
-    final now = DateTime.now();
-    final formattedDate = '${_getDayName(now.weekday)}, ${now.day} ${_getMonthName(now.month)} ${now.year}';
-    final formattedTime = '${_formatHour(now.hour)}:${_formatMinute(now.minute)} ${now.hour >= 12 ? 'PM' : 'AM'}';
-    
     return Scaffold(
       body: SafeArea(
-        child: SingleChildScrollView(
-          child: Column(
-            children: [
-              // Top navigation bar with connection status
-              Container(
-                height: 50,
-                color: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-                child: Row(
-                  children: [
-                    // Connection status indicator with auto-refresh info
-                    Container(
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: _isConnected ? Colors.green.shade100 : Colors.orange.shade100,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Stack(
-                        children: [
-                          Center(
-                            child: Icon(
-                              _isConnected ? Icons.wifi : Icons.sensors,
-                              color: _isConnected ? Colors.green : Colors.orange,
-                              size: 20,
-                            ),
+        child: Consumer<GreenhouseProvider>(
+          builder: (context, provider, child) {
+            // Get sensor data
+            final soilHumidity = provider.currentSoilHumidity ?? 0.0;
+            final soilCondition = provider.soilCondition ?? 'No Data';
+            final isConnected = provider.isConnected;
+            final lastUpdate = provider.sensorData != null ? 'Active' : 'Never';
+            
+            // Update min/max tracking
+            if (soilHumidity > 0) {
+              _updateMinMaxHumidity(soilHumidity);
+            }
+            
+            // Get current date and time
+            final now = DateTime.now();
+            final formattedDate = '${_getDayName(now.weekday)}, ${now.day} ${_getMonthName(now.month)} ${now.year}';
+            final formattedTime = '${_formatHour(now.hour)}:${_formatMinute(now.minute)} ${now.hour >= 12 ? 'PM' : 'AM'}';
+            
+            return SingleChildScrollView(
+              child: Column(
+                children: [
+                  // Top navigation bar with connection status
+                  Container(
+                    height: 50,
+                    color: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    child: Row(
+                      children: [
+                        // Connection status indicator
+                        Container(
+                          width: 40,
+                          height: 40,
+                          decoration: BoxDecoration(
+                            color: isConnected ? Colors.green.shade100 : Colors.orange.shade100,
+                            borderRadius: BorderRadius.circular(8),
                           ),
-                          // Auto-refresh indicator
-                          if (_isConnected)
-                            Positioned(
-                              top: 2,
-                              right: 2,
-                              child: Container(
-                                width: 8,
-                                height: 8,
-                                decoration: const BoxDecoration(
-                                  color: Colors.blue,
-                                  shape: BoxShape.circle,
+                          child: Stack(
+                            children: [
+                              Center(
+                                child: Icon(
+                                  isConnected ? Icons.wifi : Icons.sensors,
+                                  color: isConnected ? Colors.green : Colors.orange,
+                                  size: 20,
                                 ),
                               ),
-                            ),
-                        ],
-                      ),
-                    ),
-                    const Spacer(),
-                    // Weather indicator
-                    Container(
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: Colors.orange.shade100,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Icon(
-                        Icons.wb_sunny,
-                        color: Colors.orange.shade600,
-                        size: 20,
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    // Soil sensor indicator
-                    Container(
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: Colors.brown.shade100,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Icon(
-                        Icons.grass,
-                        color: Colors.brown.shade600,
-                        size: 20,
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    // Manual refresh button
-                    GestureDetector(
-                      onTap: _isRefreshing ? null : _refreshData,
-                      child: Container(
-                        width: 40,
-                        height: 40,
-                        decoration: BoxDecoration(
-                          color: _isRefreshing ? Colors.grey.shade200 : Colors.grey.shade100,
-                          borderRadius: BorderRadius.circular(8),
+                              // Auto-refresh indicator
+                              if (isConnected)
+                                Positioned(
+                                  top: 2,
+                                  right: 2,
+                                  child: Container(
+                                    width: 8,
+                                    height: 8,
+                                    decoration: const BoxDecoration(
+                                      color: Colors.blue,
+                                      shape: BoxShape.circle,
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
                         ),
-                        child: _isRefreshing
-                          ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                              ),
-                            )
-                          : const Icon(
-                              Icons.refresh,
-                              size: 20,
-                            ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              
-              // White gap
-              const SizedBox(height: 10),
-              
-              // Title with sensor status and auto-refresh info
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(vertical: 15),
-                color: Colors.white,
-                child: Column(
-                  children: [
-                    const Text(
-                      'Smart Tani Telkom University',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.black87,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          Icons.circle,
-                          color: _isConnected ? Colors.green : Colors.orange,
-                          size: 8,
+                        const Spacer(),
+                        // Weather indicator
+                        Container(
+                          width: 40,
+                          height: 40,
+                          decoration: BoxDecoration(
+                            color: Colors.orange.shade100,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Icon(
+                            Icons.wb_sunny,
+                            color: Colors.orange.shade600,
+                            size: 20,
+                          ),
                         ),
-                        const SizedBox(width: 6),
-                        Text(
-                          _isConnected 
-                            ? 'Soil Sensor Active • Last: $_lastUpdate'
-                            : 'Soil Sensor Disconnected',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: _isConnected ? Colors.green : Colors.orange,
+                        const SizedBox(width: 10),
+                        // Soil sensor indicator
+                        Container(
+                          width: 40,
+                          height: 40,
+                          decoration: BoxDecoration(
+                            color: Colors.brown.shade100,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Icon(
+                            Icons.water_drop,
+                            color: Colors.brown.shade600,
+                            size: 20,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        // Manual refresh button
+                        GestureDetector(
+                          onTap: _isRefreshing ? null : _refreshData,
+                          child: Container(
+                            width: 40,
+                            height: 40,
+                            decoration: BoxDecoration(
+                              color: _isRefreshing ? Colors.grey.shade200 : Colors.grey.shade100,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: _isRefreshing
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(
+                                  Icons.refresh,
+                                  size: 20,
+                                ),
                           ),
                         ),
                       ],
                     ),
-                  ],
-                ),
-              ),
-              
-              // White gap
-              const SizedBox(height: 10),
-              
-              // Weather card
-              Container(
-                margin: const EdgeInsets.symmetric(horizontal: 15),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.1),
-                      blurRadius: 4,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  children: [
-                    // Location and date row
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(15, 12, 15, 8),
-                      child: Row(
-                        children: [
-                          // Location with icon
-                          Row(
-                            children: const [
-                              Icon(
-                                Icons.location_on_outlined,
-                                size: 16,
-                                color: Colors.black87,
+                  ),
+                  
+                  // White gap
+                  const SizedBox(height: 10),
+                  
+                  // Title with sensor status
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(vertical: 15),
+                    color: Colors.white,
+                    child: Column(
+                      children: [
+                        const Text(
+                          'Smart Tani Telkom University',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.black87,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.circle,
+                              color: isConnected ? Colors.green : Colors.orange,
+                              size: 8,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              isConnected 
+                                ? 'Soil Sensor Active • Last: $lastUpdate'
+                                : 'Soil Sensor Disconnected',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: isConnected ? Colors.green : Colors.orange,
                               ),
-                              SizedBox(width: 4),
+                            ),
+                          ],
+                        ),
+                        // Show loading indicator if provider is loading
+                        if (provider.isLoading)
+                          const Padding(
+                            padding: EdgeInsets.only(top: 8),
+                            child: SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          ),
+                        // Show error message if any
+                        if (provider.errorMessage != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: Text(
+                              provider.errorMessage!,
+                              style: const TextStyle(
+                                fontSize: 10,
+                                color: Colors.red,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  
+                  // White gap
+                  const SizedBox(height: 10),
+                  
+                  // Weather card
+                  Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 15),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.1),
+                          blurRadius: 4,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      children: [
+                        // Location and date row
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(15, 12, 15, 8),
+                          child: Row(
+                            children: [
+                              // Location with icon
+                              Row(
+                                children: const [
+                                  Icon(
+                                    Icons.location_on_outlined,
+                                    size: 16,
+                                    color: Colors.black87,
+                                  ),
+                                  SizedBox(width: 4),
+                                  Text(
+                                    'Jambangan, Indonesia',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const Spacer(),
+                              // Date and time
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.end,
+                                children: [
+                                  Text(
+                                    formattedDate,
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.black87,
+                                    ),
+                                  ),
+                                  Text(
+                                    formattedTime,
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                        
+                        // Weather conditions
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(15, 8, 15, 8),
+                          child: Row(
+                            children: [
+                              // Weather condition icon and status
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Icon(
+                                    Icons.wb_sunny,
+                                    color: Colors.orange,
+                                    size: 32,
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    _weatherCondition,
+                                    style: const TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  // Weather humidity
+                                  Text(
+                                    'Humidity: ${_weatherHumidity}%',
+                                    style: const TextStyle(
+                                      fontSize: 14,
+                                      color: Colors.black87,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const Spacer(),
+                              // Current weather temperature
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    _weatherTemperature.toStringAsFixed(0),
+                                    style: const TextStyle(
+                                      fontSize: 64,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                  const Text(
+                                    '°C',
+                                    style: TextStyle(
+                                      fontSize: 24,
+                                      fontWeight: FontWeight.w500,
+                                      height: 1.5,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                        
+                        // Weather info
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
+                          decoration: BoxDecoration(
+                            color: Colors.green.shade50,
+                            border: Border(
+                              top: BorderSide(
+                                color: Colors.grey.shade200,
+                                width: 1,
+                              ),
+                            ),
+                          ),
+                          child: const Row(
+                            children: [
                               Text(
-                                'Jambangan, Indonesia',
+                                'Weather Data - Jambangan Area',
                                 style: TextStyle(
                                   fontSize: 14,
                                   fontWeight: FontWeight.w500,
                                 ),
                               ),
+                              Spacer(),
                             ],
                           ),
-                          const Spacer(),
-                          // Date and time
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.end,
-                            children: [
-                              Text(
-                                formattedDate,
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.black87,
-                                ),
-                              ),
-                              Text(
-                                formattedTime,
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
-                    
-                    // Weather conditions
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(15, 8, 15, 8),
-                      child: Row(
-                        children: [
-                          // Weather condition icon and status
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                  ),
+                  
+                  // White gap
+                  const SizedBox(height: 10),
+                  
+                  // Current soil conditions card - Updated for humidity
+                  Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 15),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.1),
+                          blurRadius: 4,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: Column(
+                      children: [
+                        // Soil conditions header
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(15, 12, 15, 8),
+                          child: Row(
                             children: [
-                              Icon(
-                                Icons.wb_sunny,
-                                color: Colors.orange,
-                                size: 32,
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                _weatherCondition,
-                                style: const TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              // Weather humidity
-                              Text(
-                                'Humidity: ${_weatherHumidity}%',
-                                style: const TextStyle(
-                                  fontSize: 14,
-                                  color: Colors.black87,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const Spacer(),
-                          // Current weather temperature
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                _weatherTemperature.toStringAsFixed(0),
-                                style: const TextStyle(
-                                  fontSize: 64,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
                               const Text(
-                                '°C',
+                                'Soil Humidity Monitoring',
                                 style: TextStyle(
-                                  fontSize: 24,
-                                  fontWeight: FontWeight.w500,
-                                  height: 1.5,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                    
-                    // Weather info
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
-                      decoration: BoxDecoration(
-                        color: Colors.green.shade50,
-                        border: Border(
-                          top: BorderSide(
-                            color: Colors.grey.shade200,
-                            width: 1,
-                          ),
-                        ),
-                      ),
-                      child: Row(
-                        children: [
-                          const Text(
-                            'Weather Data - Jambangan Area',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                          const Spacer(),
-                          // Static indicator
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              
-              // White gap
-              const SizedBox(height: 10),
-              
-              // Current soil conditions card
-              Container(
-                margin: const EdgeInsets.symmetric(horizontal: 15),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.1),
-                      blurRadius: 4,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  children: [
-                    // Soil conditions header
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(15, 12, 15, 8),
-                      child: Row(
-                        children: [
-                          const Text(
-                            'Soil Temperature Monitoring',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          const Spacer(),
-                          Icon(
-                            Icons.grass,
-                            color: Colors.brown.shade600,
-                            size: 20,
-                          ),
-                        ],
-                      ),
-                    ),
-                    
-                    // Soil temperature display
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(15, 8, 15, 8),
-                      child: Row(
-                        children: [
-                          // Soil condition icon and status
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Icon(
-                                _getSoilConditionIcon(),
-                                color: _getSoilConditionColor(),
-                                size: 32,
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                _getSoilConditionText(),
-                                style: const TextStyle(
                                   fontSize: 16,
-                                  fontWeight: FontWeight.w500,
+                                  fontWeight: FontWeight.w600,
                                 ),
+                              ),
+                              const Spacer(),
+                              Icon(
+                                Icons.water_drop,
+                                color: Colors.blue.shade600,
+                                size: 20,
                               ),
                             ],
-                          ),
-                          const Spacer(),
-                          // Current soil temperature with special handling for 0
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                _soilTemperature == 0.0 ? '--' : _soilTemperature.toStringAsFixed(1),
-                                style: TextStyle(
-                                  fontSize: 64,
-                                  fontWeight: FontWeight.w500,
-                                  color: _soilTemperature == 0.0 ? Colors.grey : Colors.black,
-                                ),
-                              ),
-                              Text(
-                                '°C',
-                                style: TextStyle(
-                                  fontSize: 24,
-                                  fontWeight: FontWeight.w500,
-                                  height: 1.5,
-                                  color: _soilTemperature == 0.0 ? Colors.grey : Colors.black,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                    
-                    // Soil sensor info
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
-                      decoration: BoxDecoration(
-                        color: Colors.brown.shade50,
-                        border: Border(
-                          top: BorderSide(
-                            color: Colors.grey.shade200,
-                            width: 1,
                           ),
                         ),
-                      ),
-                      child: Row(
-                        children: [
-                          const Text(
-                            'Soil Sensor - Green House Satu Padu',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w500,
-                            ),
+                        
+                        // Soil humidity display
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(15, 8, 15, 8),
+                          child: Row(
+                            children: [
+                              // Soil condition icon and status
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Icon(
+                                    _getSoilConditionIcon(soilHumidity),
+                                    color: _getSoilConditionColor(soilHumidity),
+                                    size: 32,
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    soilCondition,
+                                    style: const TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const Spacer(),
+                              // Current soil humidity
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    soilHumidity == 0.0 ? '0.0' : soilHumidity.toStringAsFixed(1),
+                                    style: TextStyle(
+                                      fontSize: 64,
+                                      fontWeight: FontWeight.w500,
+                                      color: soilHumidity == 0.0 ? Colors.grey : Colors.black,
+                                    ),
+                                  ),
+                                  Text(
+                                    '%',
+                                    style: TextStyle(
+                                      fontSize: 24,
+                                      fontWeight: FontWeight.w500,
+                                      height: 1.5,
+                                      color: soilHumidity == 0.0 ? Colors.grey : Colors.black,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
                           ),
-                          const Spacer(),
-                          // Connection status indicator
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: _isConnected 
-                                ? Colors.green.shade100 
-                                : Colors.orange.shade100,
-                              borderRadius: BorderRadius.circular(12),
-                            ),
+                        ),
+                        
+                        // 24h min/max display
+                        if (_maxHumidity24h > 0.0)
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(15, 0, 15, 8),
                             child: Row(
-                              mainAxisSize: MainAxisSize.min,
                               children: [
-                                Icon(
-                                  Icons.circle,
-                                  size: 8,
-                                  color: _isConnected ? Colors.green : Colors.orange,
-                                ),
-                                const SizedBox(width: 4),
                                 Text(
-                                  _isConnected ? 'MQTT' : 'OFFLINE',
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w600,
-                                    color: _isConnected ? Colors.green : Colors.orange,
+                                  '24h Range: ${_minHumidity24h.toStringAsFixed(1)}% - ${_maxHumidity24h.toStringAsFixed(1)}%',
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey,
                                   ),
                                 ),
                               ],
                             ),
                           ),
-                        ],
-                      ),
+                        
+                        // Soil sensor info
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
+                          decoration: BoxDecoration(
+                            color: Colors.blue.shade50,
+                            border: Border(
+                              top: BorderSide(
+                                color: Colors.grey.shade200,
+                                width: 1,
+                              ),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              const Text(
+                                'Soil Sensor - Firebase Connected',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              const Spacer(),
+                              // Connection status indicator
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: isConnected 
+                                    ? Colors.green.shade100 
+                                    : Colors.orange.shade100,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      Icons.circle,
+                                      size: 8,
+                                      color: isConnected ? Colors.green : Colors.orange,
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      isConnected ? 'ONLINE' : 'OFFLINE',
+                                      style: TextStyle(
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w600,
+                                        color: isConnected ? Colors.green : Colors.orange,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
+                  ),
+                  
+                  // White gap
+                  const SizedBox(height: 10),
+                ],
               ),
-              const SizedBox(height: 20),
-            ],
-          ),
+            );
+          },
         ),
       ),
     );
   }
 
-  // Get soil condition based on temperature - with special handling for 0
-  IconData _getSoilConditionIcon() {
-    if (_soilTemperature == 0.0) {
+  // Get soil condition based on humidity
+  IconData _getSoilConditionIcon(double humidity) {
+    if (humidity == 0.0) {
       return Icons.help_outline; // No data
-    } else if (_soilTemperature < 16) {
-      return Icons.ac_unit; // Cold
-    } else if (_soilTemperature > 22) {
-      return Icons.wb_sunny; // Hot
+    } else if (humidity < 40) {
+      return Icons.warning; // Dry
+    } else if (humidity > 70) {
+      return Icons.water_drop; // Too wet
     } else {
       return Icons.eco; // Optimal
     }
   }
 
-  Color _getSoilConditionColor() {
-    if (_soilTemperature == 0.0) {
+  Color _getSoilConditionColor(double humidity) {
+    if (humidity == 0.0) {
       return Colors.grey; // No data
-    } else if (_soilTemperature < 16) {
-      return Colors.blue; // Cold
-    } else if (_soilTemperature > 22) {
-      return Colors.orange; // Hot
+    } else if (humidity < 40) {
+      return Colors.orange; // Dry
+    } else if (humidity > 70) {
+      return Colors.blue; // Too wet
     } else {
       return Colors.green; // Optimal
-    }
-  }
-
-  String _getSoilConditionText() {
-    if (_soilTemperature == 0.0) {
-      return 'No Data';
-    } else if (_soilTemperature < 16) {
-      return 'Cold';
-    } else if (_soilTemperature > 22) {
-      return 'Hot';
-    } else {
-      return 'Optimal';
     }
   }
   
@@ -738,34 +657,4 @@ class _HomeScreenState extends State<HomeScreen> {
   String _formatMinute(int minute) {
     return minute.toString().padLeft(2, '0');
   }
-
-  // Temperature status helpers - with special handling for 0
-  // Color _getTemperatureStatusColor() {
-  //   if (_soilTemperature == 0.0) return Colors.grey;
-  //   if (_soilTemperature < _lowerAlarm) return Colors.red;
-  //   if (_soilTemperature < _lowerLimit) return Colors.orange;
-  //   if (_soilTemperature > _upperAlarm) return Colors.red;
-  //   if (_soilTemperature > _upperLimit) return Colors.orange;
-  //   return Colors.green;
-  // }
-
-  // IconData _getTemperatureStatusIcon() {
-  //   if (_soilTemperature == 0.0) return Icons.help_outline;
-  //   if (_soilTemperature < _lowerAlarm || _soilTemperature > _upperAlarm) {
-  //     return Icons.warning;
-  //   }
-  //   if (_soilTemperature < _lowerLimit || _soilTemperature > _upperLimit) {
-  //     return Icons.info;
-  //   }
-  //   return Icons.check_circle;
-  // }
-
-  // String _getTemperatureStatusText() {
-  //   if (_soilTemperature == 0.0) return 'No temperature data available';
-  //   if (_soilTemperature < _lowerAlarm) return 'Temperature too low - Critical!';
-  //   if (_soilTemperature < _lowerLimit) return 'Temperature below optimal range';
-  //   if (_soilTemperature > _upperAlarm) return 'Temperature too high - Critical!';
-  //   if (_soilTemperature > _upperLimit) return 'Temperature above optimal range';
-  //   return 'Temperature is optimal for plant growth';
-  // }
 }

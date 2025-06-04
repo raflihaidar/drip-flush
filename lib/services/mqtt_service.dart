@@ -81,10 +81,6 @@ class MqttService {
     client.onDisconnected = _onDisconnected;
     client.onConnected = _onConnected;
     client.onSubscribed = _onSubscribed;
-    
-    print('✅ MQTT client setup completed');
-    print('📡 Broker: $_broker:$_port');
-    print('🆔 Client ID: $uniqueClientId');
   }
 
   // Connect client - following HiveMQ official method
@@ -97,7 +93,6 @@ class MqttService {
       await client.connect(_username, _password);
       
     } on Exception catch (e) {
-      print('❌ Client exception - $e');
       connectionState = MqttCurrentConnectionState.ERROR_WHEN_CONNECTING;
       client.disconnect();
       return;
@@ -106,10 +101,7 @@ class MqttService {
     // Check connection status
     if (client.connectionStatus!.state == MqttConnectionState.connected) {
       connectionState = MqttCurrentConnectionState.CONNECTED;
-      print('✅ Client connected successfully');
     } else {
-      print('❌ ERROR: Client connection failed - disconnecting');
-      print('Status: ${client.connectionStatus}');
       connectionState = MqttCurrentConnectionState.ERROR_WHEN_CONNECTING;
       client.disconnect();
     }
@@ -122,8 +114,11 @@ class MqttService {
     // Subscribe to sensor data
     _subscribeToTopic(_sensorDataTopic);
     
-    // Subscribe to pump status
+    // Subscribe to pump status - IMPORTANT: Subscribe to status topic
     _subscribeToTopic(_pumpStatusTopic);
+    
+    // ENHANCED: Also subscribe to control topic to catch our own commands
+    _subscribeToTopic(_pumpControlTopic);
     
     // Listen to all messages
     client.updates!.listen((List<MqttReceivedMessage<MqttMessage>> c) {
@@ -134,8 +129,14 @@ class MqttService {
       print('📝 Content: $message');
       
       try {
-        final data = json.decode(message) as Map<String, dynamic>;
+        var data = json.decode(message) as Map<String, dynamic>;
         data['topic'] = c[0].topic;
+        
+        // ENHANCED: If this is a pump control command, convert it to status format
+        if (c[0].topic == _pumpControlTopic) {
+          data = _convertControlToStatus(data);
+        }
+        
         _dataController.add(data);
       } catch (e) {
         print('❌ Error parsing message: $e');
@@ -144,13 +145,39 @@ class MqttService {
     });
   }
 
+  // ENHANCED: Convert pump control command to status format
+  Map<String, dynamic> _convertControlToStatus(Map<String, dynamic> controlData) {
+    print('🔄 Converting pump control to status format...');
+    print('🔄 Original: $controlData');
+    
+    // Extract the action and convert to is_active
+    bool isActive = false;
+    if (controlData.containsKey('action')) {
+      final action = controlData['action'].toString().toLowerCase();
+      isActive = action == 'on' || action == 'start' || action == 'activate';
+    }
+    
+    // Create status format that provider expects
+    final statusData = {
+      'device': controlData['device'] ?? 'water_pump',
+      'is_active': isActive, // Use is_active instead of action
+      'timestamp': controlData['timestamp'] ?? DateTime.now().toIso8601String(),
+      'source': controlData['source'] ?? 'mqtt_service',
+      'command_id': controlData['command_id'] ?? DateTime.now().millisecondsSinceEpoch.toString(),
+      'topic': _pumpStatusTopic, // Change topic to status topic
+    };
+    
+    print('🔄 Converted: $statusData');
+    return statusData;
+  }
+
   void _subscribeToTopic(String topicName) {
     print('📡 Subscribing to $topicName topic');
     client.subscribe(topicName, MqttQos.atMostOnce);
   }
 
   // ===========================================
-  // PUBLISH MESSAGE FUNCTIONS
+  // ENHANCED PUBLISH MESSAGE FUNCTIONS
   // ===========================================
 
   // Public method untuk publish message generic
@@ -180,7 +207,7 @@ class MqttService {
     }
   }
 
-  // Method khusus untuk kontrol pump
+  // ENHANCED: Method khusus untuk kontrol pump dengan dual publish
   Future<bool> controlPump(bool activate) async {
     try {
       if (!isConnected) {
@@ -188,25 +215,95 @@ class MqttService {
         throw Exception('MQTT not connected');
       }
 
-      final message = {
+      final timestamp = DateTime.now().toIso8601String();
+      final commandId = DateTime.now().millisecondsSinceEpoch.toString();
+
+      // 1. Send control command (original format)
+      final controlMessage = {
         'device': 'water_pump',
         'action': activate ? 'on' : 'off',
+        'timestamp': timestamp,
+        'source': 'flutter_app',
+        'command_id': commandId,
+      };
+
+      final controlJson = json.encode(controlMessage);
+      print('🚰 [CONTROL] Sending pump control command...');
+      bool controlSuccess = await publishMessage(_pumpControlTopic, controlJson);
+      
+      // 2. ENHANCED: Also send status message (provider-friendly format)
+      final statusMessage = {
+        'device': 'water_pump',
+        'is_active': activate, // Provider expects this format
+        'status': activate ? 'on' : 'off',
+        'timestamp': timestamp,
+        'source': 'flutter_app',
+        'command_id': commandId,
+      };
+
+      final statusJson = json.encode(statusMessage);
+      print('🚰 [STATUS] Sending pump status update...');
+      bool statusSuccess = await publishMessage(_pumpStatusTopic, statusJson);
+      
+      if (controlSuccess && statusSuccess) {
+        print('🚰 Pump control sent successfully: ${activate ? "ON" : "OFF"}');
+        print('✅ Both control and status messages published');
+        return true;
+      } else {
+        print('⚠️ Partial success - Control: $controlSuccess, Status: $statusSuccess');
+        return controlSuccess || statusSuccess; // At least one succeeded
+      }
+      
+    } catch (e) {
+      print('❌ Error controlling pump: $e');
+      return false;
+    }
+  }
+
+  // ENHANCED: Method untuk publish sensor data dengan format konsisten
+  Future<bool> publishSensorData(Map<String, dynamic> sensorData) async {
+    try {
+      if (!isConnected) {
+        print('❌ Cannot publish sensor data - MQTT not connected');
+        return false;
+      }
+
+      // Ensure consistent format
+      final formattedData = {
+        'soil_humidity': sensorData['soil_humidity'] ?? sensorData['value'] ?? sensorData['soil_moisture'] ?? 0.0,
+        'sensor_id': sensorData['sensor_id'] ?? 'greenhouse_sensor',
+        'location': sensorData['location'] ?? 'greenhouse',
+        'timestamp': sensorData['timestamp'] ?? DateTime.now().millisecondsSinceEpoch,
+        'source': 'flutter_app',
+      };
+
+      return await publishToTopic(_sensorDataTopic, formattedData);
+    } catch (e) {
+      print('❌ Error publishing sensor data: $e');
+      return false;
+    }
+  }
+
+  // ENHANCED: Method untuk publish pump status dengan format konsisten
+  Future<bool> publishPumpStatus(bool isActive) async {
+    try {
+      if (!isConnected) {
+        print('❌ Cannot publish pump status - MQTT not connected');
+        return false;
+      }
+
+      final statusData = {
+        'device': 'water_pump',
+        'is_active': isActive,
+        'status': isActive ? 'on' : 'off',
         'timestamp': DateTime.now().toIso8601String(),
         'source': 'flutter_app',
         'command_id': DateTime.now().millisecondsSinceEpoch.toString(),
       };
 
-      final jsonMessage = json.encode(message);
-      bool success = await publishMessage(_pumpControlTopic, jsonMessage);
-      
-      if (success) {
-        print('🚰 Pump control sent successfully: ${activate ? "ON" : "OFF"}');
-      }
-      
-      return success;
-      
+      return await publishMessage(_pumpStatusTopic, json.encode(statusData));
     } catch (e) {
-      print('❌ Error controlling pump: $e');
+      print('❌ Error publishing pump status: $e');
       return false;
     }
   }
@@ -220,8 +317,8 @@ class MqttService {
       }
 
       // Tambahkan metadata default
-      data['timestamp'] = DateTime.now().toIso8601String();
-      data['source'] = 'flutter_app';
+      data['timestamp'] ??= DateTime.now().toIso8601String();
+      data['source'] ??= 'flutter_app';
       
       final jsonMessage = json.encode(data);
       return await publishMessage(topic, jsonMessage);
@@ -230,11 +327,6 @@ class MqttService {
       print('❌ Error publishing to topic $topic: $e');
       return false;
     }
-  }
-
-  // Method untuk publish sensor data
-  Future<bool> publishSensorData(Map<String, dynamic> sensorData) async {
-    return await publishToTopic(_sensorDataTopic, sensorData);
   }
 
   // Method untuk publish status
@@ -310,7 +402,7 @@ class MqttService {
     return await publishMessage(topic, message);
   }
 
-  // Method untuk test publish dengan konfirmasi
+  // ENHANCED: Method untuk test publish dengan konfirmasi
   Future<bool> testPublishWithConfirmation() async {
     try {
       if (!isConnected) {
@@ -342,8 +434,56 @@ class MqttService {
     }
   }
 
+  // ENHANCED: Test method untuk pump dengan format baru
+  Future<bool> testPumpControl() async {
+    try {
+      if (!isConnected) {
+        print('❌ Cannot test pump control - not connected');
+        return false;
+      }
+
+      print('🧪 Testing pump control with dual publish...');
+      
+      // Test ON
+      bool onResult = await controlPump(true);
+      await Future.delayed(Duration(seconds: 2));
+      
+      // Test OFF
+      bool offResult = await controlPump(false);
+      
+      print('🧪 Test results - ON: $onResult, OFF: $offResult');
+      return onResult && offResult;
+      
+    } catch (e) {
+      print('❌ Error in pump test: $e');
+      return false;
+    }
+  }
+
+  // ENHANCED: Test method untuk sensor data
+  Future<bool> testSensorData() async {
+    try {
+      if (!isConnected) {
+        print('❌ Cannot test sensor data - not connected');
+        return false;
+      }
+
+      final testSensorData = {
+        'soil_humidity': 65.5,
+        'sensor_id': 'test_sensor',
+        'location': 'greenhouse_test',
+      };
+
+      return await publishSensorData(testSensorData);
+      
+    } catch (e) {
+      print('❌ Error testing sensor data: $e');
+      return false;
+    }
+  }
+
   // ===========================================
-  // EXISTING METHODS (UNCHANGED)
+  // EXISTING METHODS (KEPT FOR COMPATIBILITY)
   // ===========================================
 
   // Generic publish message method (private - untuk internal use)

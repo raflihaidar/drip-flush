@@ -14,21 +14,32 @@ import 'package:flutter/foundation.dart'
 ///   options: DefaultFirebaseOptions.currentPlatform,
 /// );
 /// ```
-/// 
 class DefaultFirebaseOptions {
   static FirebaseOptions get currentPlatform {
     if (kIsWeb) {
-      return web;
+      throw UnsupportedError(
+        'DefaultFirebaseOptions have not been configured for web - '
+        'you can reconfigure this by running the FlutterFire CLI again.',
+      );
     }
     switch (defaultTargetPlatform) {
       case TargetPlatform.android:
         return android;
       case TargetPlatform.iOS:
-        return ios;
+        throw UnsupportedError(
+          'DefaultFirebaseOptions have not been configured for ios - '
+          'you can reconfigure this by running the FlutterFire CLI again.',
+        );
       case TargetPlatform.macOS:
-        return macos;
+        throw UnsupportedError(
+          'DefaultFirebaseOptions have not been configured for macos - '
+          'you can reconfigure this by running the FlutterFire CLI again.',
+        );
       case TargetPlatform.windows:
-        return windows;
+        throw UnsupportedError(
+          'DefaultFirebaseOptions have not been configured for windows - '
+          'you can reconfigure this by running the FlutterFire CLI again.',
+        );
       case TargetPlatform.linux:
         throw UnsupportedError(
           'DefaultFirebaseOptions have not been configured for linux - '
@@ -41,54 +52,12 @@ class DefaultFirebaseOptions {
     }
   }
 
-  static const FirebaseOptions web = FirebaseOptions(
-    apiKey: 'AIzaSyDCrirBIPmUMyy3Wq75OoAw5hoUwyi6nh0',
-    appId: '1:887967819574:web:e960738a879a97954c3597',
-    messagingSenderId: '887967819574',
-    projectId: 'drip-flush',
-    authDomain: 'drip-flush.firebaseapp.com',
-    databaseURL: 'https://drip-flush-default-rtdb.asia-southeast1.firebasedatabase.app',
-    storageBucket: 'drip-flush.firebasestorage.app',
-    measurementId: 'G-PYP4TCMVPX',
-  );
-
   static const FirebaseOptions android = FirebaseOptions(
     apiKey: 'AIzaSyBVCopMjdu0MRlx-pNJNSiOSMYJrwFR5Pw',
-    appId: '1:887967819574:android:7690ba94977f6c744c3597',
+    appId: '1:887967819574:android:657bfef5789418d14c3597',
     messagingSenderId: '887967819574',
     projectId: 'drip-flush',
     databaseURL: 'https://drip-flush-default-rtdb.asia-southeast1.firebasedatabase.app',
     storageBucket: 'drip-flush.firebasestorage.app',
-  );
-
-  static const FirebaseOptions ios = FirebaseOptions(
-    apiKey: 'AIzaSyAx-ua31gNfIcV-9oVzYnLmdNso-FR8hkI',
-    appId: '1:887967819574:ios:d9a2dd27d03051544c3597',
-    messagingSenderId: '887967819574',
-    projectId: 'drip-flush',
-    databaseURL: 'https://drip-flush-default-rtdb.asia-southeast1.firebasedatabase.app',
-    storageBucket: 'drip-flush.firebasestorage.app',
-    iosBundleId: 'com.example.dripFlush',
-  );
-
-  static const FirebaseOptions macos = FirebaseOptions(
-    apiKey: 'AIzaSyAx-ua31gNfIcV-9oVzYnLmdNso-FR8hkI',
-    appId: '1:887967819574:ios:d9a2dd27d03051544c3597',
-    messagingSenderId: '887967819574',
-    projectId: 'drip-flush',
-    databaseURL: 'https://drip-flush-default-rtdb.asia-southeast1.firebasedatabase.app',
-    storageBucket: 'drip-flush.firebasestorage.app',
-    iosBundleId: 'com.example.dripFlush',
-  );
-
-  static const FirebaseOptions windows = FirebaseOptions(
-    apiKey: 'AIzaSyDCrirBIPmUMyy3Wq75OoAw5hoUwyi6nh0',
-    appId: '1:887967819574:web:a902cb606fad21814c3597',
-    messagingSenderId: '887967819574',
-    projectId: 'drip-flush',
-    authDomain: 'drip-flush.firebaseapp.com',
-    databaseURL: 'https://drip-flush-default-rtdb.asia-southeast1.firebasedatabase.app',
-    storageBucket: 'drip-flush.firebasestorage.app',
-    measurementId: 'G-5ZWQZY8DF5',
   );
 }
