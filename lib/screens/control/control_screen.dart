@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'dart:convert';
 import 'dart:async';
+import 'package:provider/provider.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/constants/app_strings.dart';
 import '../../widgets/common/custom_card.dart';
 import '../../services/mqtt_service.dart';
+import '../../providers/greenhouse_provider.dart';  // Import provider
 
 class ControlScreen extends StatefulWidget {
   @override
@@ -12,8 +14,7 @@ class ControlScreen extends StatefulWidget {
 }
 
 class _ControlScreenState extends State<ControlScreen> with TickerProviderStateMixin {
-  bool isPumpActive = false;
-  bool isWateringScheduled = false;
+  // Remove local pump status - akan ambil dari provider
   double wateringDuration = 5.0;
   bool isSendingCommand = false;
   String _lastPumpAction = 'Never';
@@ -35,6 +36,11 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
     _setupAutoRefresh();
     _initializeMqtt(); // SAMA SEPERTI HOME SCREEN
     _listenToMqttMessages(); // SAMA SEPERTI HOME SCREEN
+    
+    // Load initial pump status from Firebase via provider
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadInitialDataFromProvider();
+    });
   }
 
   void _setupAnimations() {
@@ -55,10 +61,42 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
     // Auto refresh every 30 seconds - SAMA SEPERTI HOME
     _autoRefreshTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
       if (mounted && _mqttConnected) {
-        // Optional: refresh pump status periodically
-        print('🔄 Auto refresh - checking pump status');
+        // Optional: refresh pump status periodically dari provider
+        print('🔄 Auto refresh - checking pump status from provider');
+        _syncWithProvider();
       }
     });
+  }
+
+  // Method untuk load initial data dari provider
+  void _loadInitialDataFromProvider() {
+    final provider = Provider.of<GreenhouseProvider>(context, listen: false);
+    
+    // Update UI berdasarkan data dari provider
+    if (provider.pumpStatus != null) {
+      print('📊 Loading initial pump status from provider: ${provider.currentPumpStatus}');
+      
+      // Update last action time jika ada data
+      if (provider.lastPumpUpdate != null) {
+        setState(() {
+          _lastPumpAction = provider.lastPumpUpdate!.toString().substring(11, 16);
+        });
+      }
+    }
+    
+    // Force refresh provider data
+    provider.refreshData();
+  }
+
+  // Method untuk sync dengan provider
+  void _syncWithProvider() {
+    final provider = Provider.of<GreenhouseProvider>(context, listen: false);
+    
+    if (provider.pumpStatus != null && provider.lastPumpUpdate != null) {
+      setState(() {
+        _lastPumpAction = provider.lastPumpUpdate!.toString().substring(11, 16);
+      });
+    }
   }
 
   // Method MQTT initialization SAMA PERSIS SEPERTI HOME SCREEN
@@ -104,7 +142,9 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
   // Method untuk process incoming MQTT data - FOKUS PADA PUMP STATUS
   void _processIncomingMqttData(Map<String, dynamic> data) {
     try {
-      // Handle pump status - INI YANG PENTING UNTUK CONTROL SCREEN
+      // Handle pump status - UPDATE LAST ACTION TIME SAJA
+      bool pumpStatusChanged = false;
+      
       if (data.containsKey('device') && data['device'] == 'water_pump') {
         // Handle pump control response
         if (data.containsKey('action')) {
@@ -112,13 +152,7 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
           final isActive = action == 'on' || action == 'start' || action == 'activate';
           
           print('💧 Processing pump action: $action -> ${isActive ? "ON" : "OFF"}');
-          
-          if (mounted) {
-            setState(() {
-              isPumpActive = isActive;
-              _lastPumpAction = DateTime.now().toString().substring(11, 16); // HH:MM format
-            });
-          }
+          pumpStatusChanged = true;
         }
       }
       
@@ -127,13 +161,7 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
         final isActive = data['is_active'];
         if (isActive is bool) {
           print('💧 Processing pump status: ${isActive ? "ON" : "OFF"}');
-          
-          if (mounted) {
-            setState(() {
-              isPumpActive = isActive;
-              _lastPumpAction = DateTime.now().toString().substring(11, 16);
-            });
-          }
+          pumpStatusChanged = true;
         }
       }
       
@@ -144,34 +172,23 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
         // Jika dari pump control topic
         if (topic.contains('pump/control') || topic.contains('control/pump')) {
           if (data.containsKey('action')) {
-            final action = data['action'].toString().toLowerCase();
-            final isActive = action == 'on' || action == 'start' || action == 'activate';
-            
-            print('💧 Processing pump control from topic: $action');
-            
-            if (mounted) {
-              setState(() {
-                isPumpActive = isActive;
-                _lastPumpAction = DateTime.now().toString().substring(11, 16);
-              });
-            }
+            pumpStatusChanged = true;
           }
         }
         
         // Jika dari pump status topic
         if (topic.contains('pump/status')) {
           if (data.containsKey('is_active')) {
-            final isActive = data['is_active'] as bool;
-            print('💧 Processing pump status from topic: ${isActive ? "ON" : "OFF"}');
-            
-            if (mounted) {
-              setState(() {
-                isPumpActive = isActive;
-                _lastPumpAction = DateTime.now().toString().substring(11, 16);
-              });
-            }
+            pumpStatusChanged = true;
           }
         }
+      }
+      
+      // Update last action time jika ada perubahan status pump
+      if (pumpStatusChanged && mounted) {
+        setState(() {
+          _lastPumpAction = DateTime.now().toString().substring(11, 16);
+        });
       }
       
       // Handle error messages
@@ -179,17 +196,6 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
         final errorMsg = data['error_message'] ?? 'Unknown MQTT error';
         print('❌ MQTT Error received in Control: $errorMsg');
         _showStatusMessage('MQTT Error: $errorMsg', isSuccess: false);
-      }
-      
-      // Handle raw messages untuk debugging
-      if (data.containsKey('raw_message') && data.containsKey('message_type')) {
-        final rawMsg = data['raw_message'];
-        print('📝 Raw MQTT message in Control: $rawMsg');
-        
-        // Jika ada kata kunci pump di raw message
-        if (rawMsg.toString().toLowerCase().contains('pump')) {
-          print('🚰 Raw message might contain pump data');
-        }
       }
       
     } catch (e) {
@@ -241,7 +247,7 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
     }
   }
 
-  // Method utama untuk mengirim perintah pump - STABIL
+  // IMPROVED: Method utama untuk mengirim perintah pump - GUNAKAN PROVIDER
   Future<void> _sendPumpCommand(bool activate) async {
     if (!_mqttConnected) {
       _showStatusMessage('❌ MQTT not connected. Tap refresh to reconnect.', isSuccess: false);
@@ -258,34 +264,27 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
     });
 
     try {
-      print('💧 Attempting to control pump: ${activate ? "ON" : "OFF"}');
+      print('💧 Attempting to control pump via provider: ${activate ? "ON" : "OFF"}');
       
-      // GUNAKAN MQTT SERVICE YANG SAMA SEPERTI WORKING CODE
-      bool success = await _mqttService!.controlPump(activate);
+      // GUNAKAN PROVIDER untuk control pump (ini akan sync dengan Firebase)
+      final provider = Provider.of<GreenhouseProvider>(context, listen: false);
+      await provider.controlPump(activate);
       
-      if (success) {
-        print('✅ Pump control command sent successfully');
-        _showStatusMessage(
-          activate ? '💧 Pump activated successfully!' : '⏹️ Pump deactivated successfully!',
-          isSuccess: true,
-        );
-        
-        // Update state optimistically (akan di-update lagi dari MQTT response)
-        if (mounted) {
-          setState(() {
-            isPumpActive = activate;
-            _lastPumpAction = DateTime.now().toString().substring(11, 16);
-          });
-        }
-      } else {
-        throw Exception('Publish operation failed');
+      print('✅ Pump control command sent via provider successfully');
+      _showStatusMessage(
+        activate ? '💧 Pump activated successfully!' : '⏹️ Pump deactivated successfully!',
+        isSuccess: true,
+      );
+      
+      // Update last action time
+      if (mounted) {
+        setState(() {
+          _lastPumpAction = DateTime.now().toString().substring(11, 16);
+        });
       }
       
     } catch (e) {
-      print('❌ Failed to send pump command: $e');
-      
-      // Jangan reset state jika sudah berubah optimistically
-      // Biarkan MQTT response yang update state
+      print('❌ Failed to send pump command via provider: $e');
       
       _showStatusMessage(
         '❌ Failed to send command to pump: ${e.toString()}',
@@ -336,10 +335,9 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
           isSuccess: true,
         );
         
-        // Update state optimistically
+        // Update last action time
         if (mounted) {
           setState(() {
-            isPumpActive = activate;
             _lastPumpAction = DateTime.now().toString().substring(11, 16);
           });
         }
@@ -399,10 +397,9 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
           isSuccess: true,
         );
         
-        // Update state optimistically
+        // Update last action time
         if (mounted) {
           setState(() {
-            isPumpActive = activate;
             _lastPumpAction = DateTime.now().toString().substring(11, 16);
           });
         }
@@ -462,6 +459,13 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
       if (!_mqttConnected) {
         await _reconnectMqtt();
       }
+      
+      // Refresh provider data
+      final provider = Provider.of<GreenhouseProvider>(context, listen: false);
+      await provider.refreshData();
+      
+      // Sync local state dengan provider
+      _syncWithProvider();
       
       _showStatusMessage('🔄 Control system refreshed successfully', isSuccess: true);
     } catch (e) {
@@ -646,214 +650,252 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
   }
 
   Widget _buildPumpControl() {
-    return CustomCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+    return Consumer<GreenhouseProvider>(
+      builder: (context, provider, child) {
+        // Ambil status pump dari provider (dari Firebase)
+        final isPumpActive = provider.isPumpActive ?? false;
+        
+        return CustomCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(
-                Icons.water_drop,
-                color: AppColors.primary,
-                size: 24,
-              ),
-              SizedBox(width: 12),
-              Text(
-                'Water Pump Control',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.textPrimary,
-                ),
-              ),
-            ],
-          ),
-          SizedBox(height: 32),
-          
-          // Pump Status and Control
-          Row(
-            children: [
-              // Status Info
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Current Status',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: AppColors.textSecondary,
-                      ),
+              Row(
+                children: [
+                  Icon(
+                    Icons.water_drop,
+                    color: AppColors.primary,
+                    size: 24,
+                  ),
+                  SizedBox(width: 12),
+                  Text(
+                    'Water Pump Control',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textPrimary,
                     ),
-                    SizedBox(height: 8),
-                    Container(
-                      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: isPumpActive 
-                            ? Colors.green.withOpacity(0.1)
-                            : Colors.grey.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(
-                          color: isPumpActive ? Colors.green : Colors.grey,
-                          width: 1,
-                        ),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Container(
-                            width: 8,
-                            height: 8,
-                            decoration: BoxDecoration(
-                              color: isPumpActive ? Colors.green : Colors.grey,
-                              shape: BoxShape.circle,
-                            ),
-                          ),
-                          SizedBox(width: 8),
-                          Text(
-                            isPumpActive ? 'PUMP ON' : 'PUMP OFF',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.bold,
-                              color: isPumpActive ? Colors.green : Colors.grey,
-                            ),
-                          ),
-                        ],
-                      ),
+                  ),
+                  Spacer(),
+                  // Firebase sync indicator
+                  if (provider.isLoading)
+                    SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  else
+                    Icon(
+                      Icons.cloud_done,
+                      color: Colors.green,
+                      size: 16,
                     ),
-                    if (isPumpActive || _lastPumpAction != 'Never') ...[
-                      SizedBox(height: 12),
-                      Row(
-                        children: [
-                          Icon(
-                            Icons.access_time,
-                            size: 16,
+                ],
+              ),
+              SizedBox(height: 32),
+              
+              // Pump Status and Control
+              Row(
+                children: [
+                  // Status Info
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Current Status',
+                          style: TextStyle(
+                            fontSize: 14,
                             color: AppColors.textSecondary,
                           ),
-                          SizedBox(width: 4),
-                          Text(
-                            'Last action: $_lastPumpAction',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: AppColors.textSecondary,
+                        ),
+                        SizedBox(height: 8),
+                        Container(
+                          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: isPumpActive 
+                                ? Colors.green.withOpacity(0.1)
+                                : Colors.grey.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(
+                              color: isPumpActive ? Colors.green : Colors.grey,
+                              width: 1,
                             ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                width: 8,
+                                height: 8,
+                                decoration: BoxDecoration(
+                                  color: isPumpActive ? Colors.green : Colors.grey,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                              SizedBox(width: 8),
+                              Text(
+                                isPumpActive ? 'PUMP ON' : 'PUMP OFF',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.bold,
+                                  color: isPumpActive ? Colors.green : Colors.grey,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (provider.lastPumpUpdate != null) ...[
+                          SizedBox(height: 12),
+                          Row(
+                            children: [
+                              Icon(
+                                Icons.access_time,
+                                size: 16,
+                                color: AppColors.textSecondary,
+                              ),
+                              SizedBox(width: 4),
+                              Text(
+                                'Last update: ${provider.lastPumpUpdate!.toString().substring(11, 16)}',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: AppColors.textSecondary,
+                                ),
+                              ),
+                            ],
+                          ),
+                          Row(
+                            children: [
+                              Icon(
+                                Icons.cloud,
+                                size: 16,
+                                color: AppColors.textSecondary,
+                              ),
+                              SizedBox(width: 4),
+                              Text(
+                                'Synced with Firebase',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: AppColors.textSecondary,
+                                ),
+                              ),
+                            ],
                           ),
                         ],
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              SizedBox(width: 24),
-              
-              // Round On/Off Button
-              GestureDetector(
-                onTapDown: (_) => _animationController.forward(),
-                onTapUp: (_) => _animationController.reverse(),
-                onTapCancel: () => _animationController.reverse(),
-                onTap: (_mqttConnected && !isSendingCommand) ? () {
-                  _sendPumpCommand(!isPumpActive);
-                } : null,
-                child: AnimatedBuilder(
-                  animation: _scaleAnimation,
-                  builder: (context, child) {
-                    return Transform.scale(
-                      scale: _scaleAnimation.value,
-                      child: Container(
-                        width: 100,
-                        height: 100,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          gradient: LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: isPumpActive
-                                ? [Colors.red.shade400, Colors.red.shade600]
-                                : [Colors.green.shade400, Colors.green.shade600],
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: (isPumpActive ? Colors.red : Colors.green).withOpacity(0.3),
-                              blurRadius: 8,
-                              offset: Offset(0, 4),
-                              spreadRadius: 0,
+                      ],
+                    ),
+                  ),
+                  SizedBox(width: 24),
+                  
+                  // Round On/Off Button
+                  GestureDetector(
+                    onTapDown: (_) => _animationController.forward(),
+                    onTapUp: (_) => _animationController.reverse(),
+                    onTapCancel: () => _animationController.reverse(),
+                    onTap: (_mqttConnected && !isSendingCommand && !provider.isLoading) ? () {
+                      _sendPumpCommand(!isPumpActive);
+                    } : null,
+                    child: AnimatedBuilder(
+                      animation: _scaleAnimation,
+                      builder: (context, child) {
+                        return Transform.scale(
+                          scale: _scaleAnimation.value,
+                          child: Container(
+                            width: 100,
+                            height: 100,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              gradient: LinearGradient(
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                                colors: isPumpActive
+                                    ? [Colors.red.shade400, Colors.red.shade600]
+                                    : [Colors.green.shade400, Colors.green.shade600],
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: (isPumpActive ? Colors.red : Colors.green).withOpacity(0.3),
+                                  blurRadius: 8,
+                                  offset: Offset(0, 4),
+                                  spreadRadius: 0,
+                                ),
+                              ],
                             ),
-                          ],
-                        ),
-                        child: Stack(
-                          children: [
-                            // Outer ring
-                            Center(
-                              child: Container(
-                                width: 90,
-                                height: 90,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  border: Border.all(
-                                    color: Colors.white.withOpacity(0.3),
-                                    width: 1,
+                            child: Stack(
+                              children: [
+                                // Outer ring
+                                Center(
+                                  child: Container(
+                                    width: 90,
+                                    height: 90,
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      border: Border.all(
+                                        color: Colors.white.withOpacity(0.3),
+                                        width: 1,
+                                      ),
+                                    ),
                                   ),
                                 ),
-                              ),
-                            ),
-                            // Inner content
-                            Center(
-                              child: isSendingCommand
-                                ? CircularProgressIndicator(
-                                    color: Colors.white,
-                                    strokeWidth: 3,
-                                  )
-                                : Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Icon(
-                                        isPumpActive ? Icons.stop : Icons.play_arrow,
+                                // Inner content
+                                Center(
+                                  child: (isSendingCommand || provider.isLoading)
+                                    ? CircularProgressIndicator(
                                         color: Colors.white,
-                                        size: 32,
+                                        strokeWidth: 3,
+                                      )
+                                    : Column(
+                                        mainAxisAlignment: MainAxisAlignment.center,
+                                        children: [
+                                          Icon(
+                                            isPumpActive ? Icons.stop : Icons.play_arrow,
+                                            color: Colors.white,
+                                            size: 32,
+                                          ),
+                                          SizedBox(height: 4),
+                                          Text(
+                                            isPumpActive ? 'STOP' : 'START',
+                                            style: TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.bold,
+                                              letterSpacing: 1,
+                                            ),
+                                          ),
+                                        ],
                                       ),
-                                      SizedBox(height: 4),
-                                      Text(
-                                        isPumpActive ? 'STOP' : 'START',
-                                        style: TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 10,
-                                          fontWeight: FontWeight.bold,
-                                          letterSpacing: 1,
-                                        ),
+                                ),
+                                // Disabled overlay
+                                if (!_mqttConnected)
+                                  Container(
+                                    width: 100,
+                                    height: 100,
+                                    decoration: BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: Colors.black.withOpacity(0.5),
+                                    ),
+                                    child: Center(
+                                      child: Icon(
+                                        Icons.wifi_off,
+                                        color: Colors.white,
+                                        size: 24,
                                       ),
-                                    ],
+                                    ),
                                   ),
+                              ],
                             ),
-                            // Disabled overlay
-                            if (!_mqttConnected)
-                              Container(
-                                width: 100,
-                                height: 100,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: Colors.black.withOpacity(0.5),
-                                ),
-                                child: Center(
-                                  child: Icon(
-                                    Icons.wifi_off,
-                                    color: Colors.white,
-                                    size: 24,
-                                  ),
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                    );
-                  },
-                ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
               ),
+              
+              SizedBox(height: 24),          
             ],
           ),
-          
-          SizedBox(height: 24),          
-        ],
-      ),
+        );
+      },
     );
   }
 
@@ -890,17 +932,21 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
               ),
               SizedBox(width: 12),
               Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: (_mqttConnected && !isSendingCommand) 
-                    ? () => _sendCustomPumpCommand(!isPumpActive)
-                    : null,
-                  icon: Icon(Icons.settings),
-                  label: Text('Custom CMD'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.orange,
-                    foregroundColor: Colors.white,
-                    padding: EdgeInsets.symmetric(vertical: 12),
-                  ),
+                child: Consumer<GreenhouseProvider>(
+                  builder: (context, provider, child) {
+                    return ElevatedButton.icon(
+                      onPressed: (_mqttConnected && !isSendingCommand) 
+                        ? () => _sendCustomPumpCommand(!(provider.isPumpActive ?? false))
+                        : null,
+                      icon: Icon(Icons.settings),
+                      label: Text('Custom CMD'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.orange,
+                        foregroundColor: Colors.white,
+                        padding: EdgeInsets.symmetric(vertical: 12),
+                      ),
+                    );
+                  },
                 ),
               ),
             ],
@@ -908,20 +954,24 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
           
           SizedBox(height: 12),
           
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: (_mqttConnected && !isSendingCommand) 
-                ? () => _sendPumpCommandWithRetry(!isPumpActive)
-                : null,
-              icon: Icon(Icons.repeat),
-              label: Text('Send with Retry Mechanism'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.purple,
-                foregroundColor: Colors.white,
-                padding: EdgeInsets.symmetric(vertical: 12),
-              ),
-            ),
+          Consumer<GreenhouseProvider>(
+            builder: (context, provider, child) {
+              return SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: (_mqttConnected && !isSendingCommand) 
+                    ? () => _sendPumpCommandWithRetry(!(provider.isPumpActive ?? false))
+                    : null,
+                  icon: Icon(Icons.repeat),
+                  label: Text('Send with Retry Mechanism'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.purple,
+                    foregroundColor: Colors.white,
+                    padding: EdgeInsets.symmetric(vertical: 12),
+                  ),
+                ),
+              );
+            },
           ),
         ],
       ),
@@ -929,24 +979,84 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
   }
 
   Widget _buildDeviceStatus() {
-    return CustomCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Device Status',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w600,
-              color: AppColors.textPrimary,
-            ),
+    return Consumer<GreenhouseProvider>(
+      builder: (context, provider, child) {
+        final isPumpActive = provider.isPumpActive ?? false;
+        final isConnectedToFirebase = provider.isConnected;
+        
+        return CustomCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Device Status',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+              SizedBox(height: 16),
+              _buildStatusItem(
+                'Water Pump', 
+                isPumpActive ? 'Active' : 'Inactive', 
+                Icons.water_drop, 
+                isPumpActive
+              ),
+              _buildStatusItem(
+                'Soil Sensors', 
+                provider.sensorData != null ? 'Active' : 'No Data', 
+                Icons.sensors, 
+                provider.sensorData != null
+              ),
+              _buildStatusItem(
+                'MQTT Connection', 
+                _mqttConnected ? 'Connected' : 'Disconnected', 
+                Icons.wifi, 
+                _mqttConnected
+              ),
+              _buildStatusItem(
+                'Firebase Sync', 
+                isConnectedToFirebase ? 'Connected' : 'Disconnected', 
+                Icons.cloud, 
+                isConnectedToFirebase
+              ),
+              _buildStatusItem(
+                'Provider Status', 
+                provider.isLoading ? 'Loading...' : 'Ready', 
+                Icons.settings, 
+                !provider.isLoading
+              ),
+              if (provider.errorMessage != null) ...[
+                SizedBox(height: 8),
+                Container(
+                  padding: EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.red.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.red.shade200),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.error, color: Colors.red, size: 16),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Error: ${provider.errorMessage}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.red.shade700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ],
           ),
-          SizedBox(height: 16),
-          _buildStatusItem('Water Pump', isPumpActive ? 'Active' : 'Inactive', Icons.water_drop, isPumpActive),
-          _buildStatusItem('Soil Sensors', '2 Active', Icons.sensors, true),
-          _buildStatusItem('MQTT Connection', _mqttConnected ? 'Connected' : 'Disconnected', Icons.wifi, _mqttConnected),
-        ],
-      ),
+        );
+      },
     );
   }
 

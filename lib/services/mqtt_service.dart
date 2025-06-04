@@ -168,15 +168,19 @@ class MqttService {
         
         try {
           // Try to parse as JSON
-          final Map<String, dynamic> jsonData = jsonDecode(message);
+          var jsonData = jsonDecode(message) as Map<String, dynamic>;
           
           // Add topic and timestamp info
-          final Map<String, dynamic> data = Map<String, dynamic>.from(jsonData);
-          data['topic'] = topic;
-          data['received_at'] = DateTime.now().toIso8601String();
+          jsonData['topic'] = topic;
+          jsonData['received_at'] = DateTime.now().toIso8601String();
+          
+          // ENHANCED: If this is a pump control command, convert it to status format
+          if (topic == _pumpControlTopic) {
+            jsonData = _convertControlToStatus(jsonData);
+          }
           
           // Safe add to stream
-          _safeAddToStream(data);
+          _safeAddToStream(jsonData);
           
           print('✅ MQTT: Successfully parsed JSON from $topic');
           
@@ -213,6 +217,28 @@ class MqttService {
       
       _safeAddToStream(errorData);
     }
+  }
+
+  // ENHANCED: Convert pump control command to status format (sama seperti text 2)
+  Map<String, dynamic> _convertControlToStatus(Map<String, dynamic> controlData) {
+    // Extract the action and convert to is_active
+    bool isActive = false;
+    if (controlData.containsKey('action')) {
+      final action = controlData['action'].toString().toLowerCase();
+      isActive = action == 'on' || action == 'start' || action == 'activate';
+    }
+    
+    // Create status format that provider expects
+    final statusData = {
+      'device': controlData['device'] ?? 'water_pump',
+      'is_active': isActive, // Use is_active instead of action
+      'timestamp': controlData['timestamp'] ?? DateTime.now().toIso8601String(),
+      'source': controlData['source'] ?? 'mqtt_service',
+      'command_id': controlData['command_id'] ?? DateTime.now().millisecondsSinceEpoch.toString(),
+      'topic': _pumpStatusTopic, // Change topic to status topic
+    };
+    
+    return statusData;
   }
 
   // Helper method untuk parse simple format messages
@@ -277,6 +303,9 @@ class MqttService {
         _client!.subscribe('greenhouse/status/+', MqttQos.atMostOnce);
         _client!.subscribe(_pumpStatusTopic, MqttQos.atMostOnce);
         
+        // ENHANCED: Also subscribe to control topic to catch our own commands
+        _client!.subscribe(_pumpControlTopic, MqttQos.atMostOnce);
+        
         print('✅ MQTT: Subscribed to all topics');
       }
     } catch (e) {
@@ -284,25 +313,75 @@ class MqttService {
     }
   }
 
-  Future<bool> controlPump(bool isActive) async {
+  // ENHANCED: Method khusus untuk kontrol pump dengan dual publish - sama seperti text 2
+  Future<bool> controlPump(bool activate) async {
     try {
       if (!isConnected) {
-        print('⚠️ MQTT: Cannot control pump - not connected');
-        return false;
+        print('❌ Cannot control pump - MQTT not connected');
+        throw Exception('MQTT not connected');
       }
 
-      final pumpCommand = {
+      final timestamp = DateTime.now().toIso8601String();
+      final commandId = DateTime.now().millisecondsSinceEpoch.toString();
+
+      // 1. Send control command (original format)
+      final controlMessage = {
         'device': 'water_pump',
-        'is_active': isActive,
-        'status': isActive ? 'on' : 'off',
-        'timestamp': DateTime.now().toIso8601String(),
+        'action': activate ? 'on' : 'off',
+        'timestamp': timestamp,
         'source': 'flutter_app',
-        'command_id': DateTime.now().millisecondsSinceEpoch.toString(),
+        'command_id': commandId,
       };
 
-      return await publishToTopic(_pumpControlTopic, pumpCommand);
+      final controlJson = jsonEncode(controlMessage);
+      bool controlSuccess = await publishMessage(_pumpControlTopic, controlJson);
+      
+      // 2. ENHANCED: Also send status message (provider-friendly format)
+      final statusMessage = {
+        'device': 'water_pump',
+        'is_active': activate, // Provider expects this format
+        'status': activate ? 'on' : 'off',
+        'timestamp': timestamp,
+        'source': 'flutter_app',
+        'command_id': commandId,
+      };
+
+      final statusJson = jsonEncode(statusMessage);
+      bool statusSuccess = await publishMessage(_pumpStatusTopic, statusJson);
+      
+      if (controlSuccess && statusSuccess) {
+        print('✅ Both control and status messages published');
+        return true;
+      } else {
+        print('⚠️ Partial success - Control: $controlSuccess, Status: $statusSuccess');
+        return controlSuccess || statusSuccess; // At least one succeeded
+      }
+      
     } catch (e) {
-      print('❌ MQTT pump control error: $e');
+      print('❌ Error controlling pump: $e');
+      return false;
+    }
+  }
+
+  // Method untuk publish message yang diperlukan oleh controlPump
+  Future<bool> publishMessage(String topic, String message) async {
+    try {
+      if (!isConnected) {
+        throw Exception('MQTT not connected. Current state: $_isConnected');
+      }
+
+      final MqttClientPayloadBuilder builder = MqttClientPayloadBuilder();
+      builder.addString(message);
+
+      // Publish dengan QoS level 1 untuk memastikan delivery
+      _client!.publishMessage(topic, MqttQos.atLeastOnce, builder.payload!);
+      
+      print('✅ Message published successfully to $topic');
+      return true;
+      
+    } catch (e, stackTrace) {
+      print('❌ Error publishing message: $e');
+      print('Stack trace: $stackTrace');
       return false;
     }
   }
@@ -479,10 +558,6 @@ class MqttService {
         'source': 'mobile_app',
       };
 
-      // if (additionalData != null) {
-      //   statusData.addAll(additionalData);
-      // }
-
       return await publishToTopic('greenhouse/status/app', statusData);
     } catch (e) {
       print('❌ MQTT publish status error: $e');
@@ -499,10 +574,6 @@ class MqttService {
         'timestamp': DateTime.now().toIso8601String(),
         'source': 'mobile_app',
       };
-
-      // if (params != null) {
-      //   commandData['parameters'] = params;
-      // }
 
       return await publishToTopic('greenhouse/commands/$deviceId', commandData);
     } catch (e) {
