@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'dart:async';
 import 'package:provider/provider.dart';
 import '../../core/constants/app_colors.dart';
-import '../../core/constants/app_strings.dart';
 import '../../widgets/common/custom_card.dart';
 import '../../services/mqtt_service.dart';
 import '../../providers/greenhouse_provider.dart';  // Import provider
@@ -21,7 +20,6 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
   Timer? _autoRefreshTimer;
   bool _isRefreshing = false;
   
-  // MQTT Service - SAMA PERSIS SEPERTI HOME SCREEN
   MqttService? _mqttService;
   bool _mqttConnected = false;
   bool _isConnecting = false;
@@ -521,8 +519,6 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
               SizedBox(height: 24),
               _buildPumpControl(),
               SizedBox(height: 24),
-              _buildTestButtons(),
-              SizedBox(height: 24),
               _buildDeviceStatus(),
             ],
           ),
@@ -1009,24 +1005,12 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
                 Icons.sensors, 
                 provider.sensorData != null
               ),
-              _buildStatusItem(
-                'MQTT Connection', 
-                _mqttConnected ? 'Connected' : 'Disconnected', 
-                Icons.wifi, 
-                _mqttConnected
-              ),
-              _buildStatusItem(
-                'Firebase Sync', 
-                isConnectedToFirebase ? 'Connected' : 'Disconnected', 
-                Icons.cloud, 
-                isConnectedToFirebase
-              ),
-              _buildStatusItem(
-                'Provider Status', 
-                provider.isLoading ? 'Loading...' : 'Ready', 
-                Icons.settings, 
-                !provider.isLoading
-              ),
+              // _buildStatusItem(
+              //   'MQTT Connection', 
+              //   _mqttConnected ? 'Connected' : 'Disconnected', 
+              //   Icons.wifi, 
+              //   _mqttConnected
+              // ),
               if (provider.errorMessage != null) ...[
                 SizedBox(height: 8),
                 Container(

@@ -359,19 +359,19 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                         const SizedBox(width: 10),
                         // Soil sensor indicator
-                        Container(
-                          width: 40,
-                          height: 40,
-                          decoration: BoxDecoration(
-                            color: Colors.brown.shade100,
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Icon(
-                            Icons.water_drop,
-                            color: Colors.brown.shade600,
-                            size: 20,
-                          ),
-                        ),
+                        // Container(
+                        //   width: 40,
+                        //   height: 40,
+                        //   decoration: BoxDecoration(
+                        //     color: Colors.brown.shade100,
+                        //     borderRadius: BorderRadius.circular(8),
+                        //   ),
+                        //   child: Icon(
+                        //     Icons.water_drop,
+                        //     color: Colors.brown.shade600,
+                        //     size: 20,
+                        //   ),
+                        // ),
                         const SizedBox(width: 10),
                         // Manual refresh button dengan reconnect capability
                         GestureDetector(
