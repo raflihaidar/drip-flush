@@ -8,11 +8,11 @@ class SensorChart extends StatelessWidget {
   final List<Map<String, dynamic>>? historicalData;
 
   const SensorChart({
-    Key? key,
+    super.key,
     required this.sensorType,
     required this.period,
     this.historicalData,
-  }) : super(key: key);
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -69,7 +69,7 @@ class SensorChart extends StatelessWidget {
             show: true,
             drawVerticalLine: true,
             horizontalInterval: 20,
-            verticalInterval: _getVerticalInterval(),
+            verticalInterval: _getVerticalInterval(chartData),
             getDrawingHorizontalLine: (value) {
               return FlLine(
                 color: Colors.grey[300] ?? Colors.grey,
@@ -95,8 +95,8 @@ class SensorChart extends StatelessWidget {
               sideTitles: SideTitles(
                 showTitles: true,
                 reservedSize: 30,
-                interval: _getBottomInterval(),
-                getTitlesWidget: _getBottomTitleWidget,
+                interval: _getBottomInterval(chartData),
+                getTitlesWidget: (value, meta) => _getBottomTitleWidget(value, meta, chartData),
               ),
             ),
             leftTitles: AxisTitles(
@@ -115,8 +115,8 @@ class SensorChart extends StatelessWidget {
               width: 1,
             ),
           ),
-          minX: chartData.first.x,
-          maxX: chartData.last.x,
+          minX: chartData.isNotEmpty ? chartData.first.x : 0,
+          maxX: chartData.isNotEmpty ? chartData.last.x : 1,
           minY: 0,
           maxY: 100,
           lineBarsData: [
@@ -184,50 +184,196 @@ class SensorChart extends StatelessWidget {
     );
   }
 
+  // FIXED: Proper data preparation with safe timestamp handling
   List<FlSpot> _prepareChartData() {
     if (historicalData == null || historicalData!.isEmpty) {
       return [];
     }
 
-    // Sort data by timestamp
-    final sortedData = List<Map<String, dynamic>>.from(historicalData!)
-      ..sort((a, b) {
-        final timestampA = a['timestamp'] as int? ?? 0;
-        final timestampB = b['timestamp'] as int? ?? 0;
-        return timestampA.compareTo(timestampB);
-      });
+    print('📊 [CHART] Starting chart data preparation...');
+    print('📊 [CHART] Raw data count: ${historicalData!.length}');
 
-    // Limit data points based on period for better performance
-    final maxPoints = _getMaxDataPoints();
-    final dataToUse = sortedData.length > maxPoints 
-        ? _sampleData(sortedData, maxPoints)
-        : sortedData;
-
-    final spots = <FlSpot>[];
+    // Step 1: Convert and validate data with safe timestamp extraction
+    final validEntries = <Map<String, dynamic>>[];
     
-    for (int i = 0; i < dataToUse.length; i++) {
-      final entry = dataToUse[i];
-      
+    for (final entry in historicalData!) {
       try {
-        // Safe extraction from your Firebase structure: sensor.soil_sensor.value
-        final sensorData = entry['sensor'];
-        if (sensorData is Map) {
-          final soilSensor = sensorData['soil_sensor'];
-          if (soilSensor is Map) {
-            final value = soilSensor['value'];
-            if (value is num && value >= 0 && value <= 100) {
-              spots.add(FlSpot(i.toDouble(), value.toDouble()));
+        // Safe timestamp extraction - handle both DateTime and int formats
+        DateTime? timestamp;
+        dynamic timestampValue = entry['timestamp'];
+        
+        if (timestampValue is DateTime) {
+          timestamp = timestampValue;
+        } else if (timestampValue is int) {
+          timestamp = DateTime.fromMillisecondsSinceEpoch(timestampValue);
+        } else if (timestampValue is String) {
+          // Try parsing string timestamp
+          try {
+            timestamp = DateTime.parse(timestampValue);
+          } catch (e) {
+            // Try parsing as milliseconds string
+            final intValue = int.tryParse(timestampValue);
+            if (intValue != null) {
+              timestamp = DateTime.fromMillisecondsSinceEpoch(intValue);
             }
           }
         }
+
+        // Safe value extraction - handle your specific data structure
+        double? value;
+        
+        // Try the format from your history_screen.dart first
+        if (entry.containsKey('value') && entry['value'] is num) {
+          value = (entry['value'] as num).toDouble();
+        }
+        // Try y coordinate (from your processed data)
+        else if (entry.containsKey('y') && entry['y'] is num) {
+          value = (entry['y'] as num).toDouble();
+        }
+        // Try nested sensor structure
+        else if (entry.containsKey('sensor')) {
+          final sensorData = entry['sensor'];
+          if (sensorData is Map) {
+            // Try different sensor formats
+            final possiblePaths = [
+              ['soil_sensor_1', 'value'],
+              ['soil_sensor_2', 'value'], 
+              ['soil_sensor', 'value'],
+              ['value'],
+            ];
+            
+            for (final path in possiblePaths) {
+              dynamic current = sensorData;
+              bool found = true;
+              
+              for (final key in path) {
+                if (current is Map && current.containsKey(key)) {
+                  current = current[key];
+                } else {
+                  found = false;
+                  break;
+                }
+              }
+              
+              if (found && current is num) {
+                value = current.toDouble();
+                break;
+              }
+            }
+          }
+        }
+
+        // Validate both timestamp and value
+        if (timestamp != null && value != null && value >= 0 && value <= 100) {
+          validEntries.add({
+            'timestamp': timestamp,
+            'value': value,
+            'originalEntry': entry, // Keep reference for tooltip
+          });
+        }
       } catch (e) {
-        print('❌ Error extracting chart data from entry: $entry, error: $e');
+        print('❌ [CHART] Error processing entry: $entry, error: $e');
         continue;
       }
     }
 
-    print('📊 [CHART] Prepared ${spots.length} data points for chart');
+    print('📊 [CHART] Valid entries after processing: ${validEntries.length}');
+
+    if (validEntries.isEmpty) {
+      print('❌ [CHART] No valid entries found');
+      return [];
+    }
+
+    // Step 2: Sort by timestamp (now safe because all timestamps are DateTime)
+    validEntries.sort((a, b) {
+      final DateTime timestampA = a['timestamp'];
+      final DateTime timestampB = b['timestamp'];
+      return timestampA.compareTo(timestampB);
+    });
+
+    // Step 3: Limit data points for performance
+    final maxPoints = _getMaxDataPoints();
+    final dataToUse = validEntries.length > maxPoints 
+        ? _sampleData(validEntries, maxPoints)
+        : validEntries;
+
+    print('📊 [CHART] Data points after sampling: ${dataToUse.length}');
+
+    // Step 4: Create FlSpot objects and store processed data for tooltips
+    final spots = <FlSpot>[];
+    
+    for (int i = 0; i < dataToUse.length; i++) {
+      final entry = dataToUse[i];
+      final value = entry['value'] as double;
+      
+      // Use index as X coordinate for consistent spacing
+      spots.add(FlSpot(i.toDouble(), value));
+    }
+
+    print('📊 [CHART] Final chart spots: ${spots.length}');
+    
     return spots;
+  }
+
+  // Helper method to get processed data for tooltips and titles
+  List<Map<String, dynamic>> _getProcessedData() {
+    if (historicalData == null || historicalData!.isEmpty) {
+      return [];
+    }
+
+    final validEntries = <Map<String, dynamic>>[];
+    
+    for (final entry in historicalData!) {
+      try {
+        DateTime? timestamp;
+        dynamic timestampValue = entry['timestamp'];
+        
+        if (timestampValue is DateTime) {
+          timestamp = timestampValue;
+        } else if (timestampValue is int) {
+          timestamp = DateTime.fromMillisecondsSinceEpoch(timestampValue);
+        } else if (timestampValue is String) {
+          try {
+            timestamp = DateTime.parse(timestampValue);
+          } catch (e) {
+            final intValue = int.tryParse(timestampValue);
+            if (intValue != null) {
+              timestamp = DateTime.fromMillisecondsSinceEpoch(intValue);
+            }
+          }
+        }
+
+        double? value;
+        if (entry.containsKey('value') && entry['value'] is num) {
+          value = (entry['value'] as num).toDouble();
+        } else if (entry.containsKey('y') && entry['y'] is num) {
+          value = (entry['y'] as num).toDouble();
+        }
+
+        if (timestamp != null && value != null && value >= 0 && value <= 100) {
+          validEntries.add({
+            'timestamp': timestamp,
+            'value': value,
+            'originalEntry': entry,
+          });
+        }
+      } catch (e) {
+        continue;
+      }
+    }
+
+    if (validEntries.isEmpty) return [];
+
+    validEntries.sort((a, b) {
+      final DateTime timestampA = a['timestamp'];
+      final DateTime timestampB = b['timestamp'];
+      return timestampA.compareTo(timestampB);
+    });
+
+    final maxPoints = _getMaxDataPoints();
+    return validEntries.length > maxPoints 
+        ? _sampleData(validEntries, maxPoints)
+        : validEntries;
   }
 
   int _getMaxDataPoints() {
@@ -261,8 +407,7 @@ class SensorChart extends StatelessWidget {
     return sampledData;
   }
 
-  double _getVerticalInterval() {
-    final chartData = _prepareChartData();
+  double _getVerticalInterval(List<FlSpot> chartData) {
     if (chartData.isEmpty) return 1.0;
     
     switch (period) {
@@ -279,34 +424,32 @@ class SensorChart extends StatelessWidget {
     }
   }
 
-  double _getBottomInterval() {
-    final chartData = _prepareChartData();
+  double _getBottomInterval(List<FlSpot> chartData) {
     if (chartData.isEmpty) return 1.0;
     
     return (chartData.length / 6).roundToDouble().clamp(1.0, double.infinity);
   }
 
-  Widget _getBottomTitleWidget(double value, TitleMeta meta) {
+  Widget _getBottomTitleWidget(double value, TitleMeta meta, List<FlSpot> chartData) {
     final dataPoint = _findDataPointByX(value);
     if (dataPoint == null) return Text('');
 
-    final timestamp = dataPoint['timestamp'] as int? ?? 0;
-    final dateTime = DateTime.fromMillisecondsSinceEpoch(timestamp);
+    final DateTime timestamp = dataPoint['timestamp'];
     
     String text;
     switch (period) {
       case '24 Hours':
-        text = '${dateTime.hour.toString().padLeft(2, '0')}:${dateTime.minute.toString().padLeft(2, '0')}';
+        text = '${timestamp.hour.toString().padLeft(2, '0')}:${timestamp.minute.toString().padLeft(2, '0')}';
         break;
       case '7 Days':
-        text = '${dateTime.day}/${dateTime.month}';
+        text = '${timestamp.day}/${timestamp.month}';
         break;
       case '30 Days':
       case '90 Days':
-        text = '${dateTime.day}/${dateTime.month}';
+        text = '${timestamp.day}/${timestamp.month}';
         break;
       default:
-        text = '${dateTime.hour}:${dateTime.minute}';
+        text = '${timestamp.hour}:${timestamp.minute}';
     }
 
     return SideTitleWidget(
@@ -334,39 +477,28 @@ class SensorChart extends StatelessWidget {
   }
 
   Map<String, dynamic>? _findDataPointByX(double x) {
+    final processedData = _getProcessedData();
     final index = x.round();
-    final sortedData = List<Map<String, dynamic>>.from(historicalData!)
-      ..sort((a, b) {
-        final timestampA = a['timestamp'] as int? ?? 0;
-        final timestampB = b['timestamp'] as int? ?? 0;
-        return timestampA.compareTo(timestampB);
-      });
-
-    final maxPoints = _getMaxDataPoints();
-    final dataToUse = sortedData.length > maxPoints 
-        ? _sampleData(sortedData, maxPoints)
-        : sortedData;
-
-    if (index >= 0 && index < dataToUse.length) {
-      return dataToUse[index];
+    
+    if (index >= 0 && index < processedData.length) {
+      return processedData[index];
     }
     return null;
   }
 
   String _formatTooltipTime(Map<String, dynamic> dataPoint) {
-    final timestamp = dataPoint['timestamp'] as int? ?? 0;
-    final dateTime = DateTime.fromMillisecondsSinceEpoch(timestamp);
+    final DateTime timestamp = dataPoint['timestamp'];
     
     switch (period) {
       case '24 Hours':
-        return '${dateTime.hour.toString().padLeft(2, '0')}:${dateTime.minute.toString().padLeft(2, '0')}';
+        return '${timestamp.hour.toString().padLeft(2, '0')}:${timestamp.minute.toString().padLeft(2, '0')}';
       case '7 Days':
-        return '${dateTime.day}/${dateTime.month} ${dateTime.hour.toString().padLeft(2, '0')}:${dateTime.minute.toString().padLeft(2, '0')}';
+        return '${timestamp.day}/${timestamp.month} ${timestamp.hour.toString().padLeft(2, '0')}:${timestamp.minute.toString().padLeft(2, '0')}';
       case '30 Days':
       case '90 Days':
-        return '${dateTime.day}/${dateTime.month}/${dateTime.year}';
+        return '${timestamp.day}/${timestamp.month}/${timestamp.year}';
       default:
-        return '${dateTime.day}/${dateTime.month} ${dateTime.hour}:${dateTime.minute}';
+        return '${timestamp.day}/${timestamp.month} ${timestamp.hour}:${timestamp.minute}';
     }
   }
 }

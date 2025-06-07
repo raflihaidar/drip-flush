@@ -53,11 +53,24 @@ class GreenhouseProvider with ChangeNotifier {
   DateTime? get lastSensorUpdate => _lastSensorUpdate;
   DateTime? get lastPumpUpdate => _lastPumpUpdate;
   
-  // Helper getters
-  double? get currentSoilHumidity => _sensorData?.sensor.soilSensor.value;
+  // Enhanced getters for multi-sensor support
+  double? get currentSoilHumidity => _sensorData?.sensor.averageHumidity;
+  double? get sensor1Humidity => _sensorData?.sensor.soilSensor1.value;
+  double? get sensor2Humidity => _sensorData?.sensor.soilSensor2.value;
+  
+  String? get sensor1Condition => _sensorData?.sensor.soilSensor1.condition;
+  String? get sensor2Condition => _sensorData?.sensor.soilSensor2.condition;
+  String? get overallCondition => _sensorData?.sensor.overallCondition;
+  
+  bool? get sensor1Active => _sensorData?.sensor.soilSensor1.isActive;
+  bool? get sensor2Active => _sensorData?.sensor.soilSensor2.isActive;
+  
   bool? get isPumpActive => _pumpStatus?.pump.waterPump.isActive;
-  String? get soilCondition => _sensorData?.sensor.soilSensor.condition;
   String? get currentPumpStatus => _pumpStatus?.pump.waterPump.isActive == true ? 'ON' : 'OFF';
+
+  // Backward compatibility
+  double? get currentSoilHumidityLegacy => sensor1Humidity; // For backward compatibility
+  String? get soilCondition => overallCondition;
 
   Future<void> initialize() async {
     _setLoading(true);
@@ -174,7 +187,7 @@ class GreenhouseProvider with ChangeNotifier {
     }
   }
 
-  // ENHANCED MQTT DATA HANDLER WITH THROTTLED FIREBASE SAVES
+  // ENHANCED MQTT DATA HANDLER WITH MULTI-SENSOR SUPPORT
   Future<void> _handleMqttDataEnhanced(Map<String, dynamic> data) async {
     try {
       final topic = data['topic'] as String;
@@ -198,31 +211,57 @@ class GreenhouseProvider with ChangeNotifier {
     }
   }
 
-  // ENHANCED SENSOR DATA PROCESSING WITH THROTTLED FIREBASE SAVE
+  // ENHANCED SENSOR DATA PROCESSING WITH MULTI-SENSOR SUPPORT
   Future<void> _processSensorDataFromMqtt(Map<String, dynamic> data) async {
     try {
       print('🌱 [MQTT→SENSOR] Processing sensor data...');
       
-      // Extract sensor value with validation
-      final sensorValue = _extractSensorValue(data);
-      if (sensorValue == null) {
-        print('⚠️ [MQTT→SENSOR] No valid sensor value found in data');
+      // Extract sensor values for both sensors
+      final sensor1Value = _extractSensorValue(data, 'sensor_1');
+      final sensor2Value = _extractSensorValue(data, 'sensor_2');
+      
+      if (sensor1Value == null && sensor2Value == null) {
+        print('⚠️ [MQTT→SENSOR] No valid sensor values found in data');
         return;
       }
       
-      print('📊 [MQTT→SENSOR] Extracted value: $sensorValue%');
+      print('📊 [MQTT→SENSOR] Extracted values - Sensor1: ${sensor1Value ?? "N/A"}%, Sensor2: ${sensor2Value ?? "N/A"}%');
       
-      // Create SensorData object
+      // Get current sensor data or create new one
+      SensorData currentData = _sensorData ?? SensorData(sensor: Sensor.getDefault());
+      
+      // Update only the sensors that have new data
+      SoilSensor newSensor1 = sensor1Value != null 
+          ? currentData.sensor.soilSensor1.copyWith(
+              value: sensor1Value,
+              lastUpdate: DateTime.now(),
+              isActive: true,
+            )
+          : currentData.sensor.soilSensor1;
+          
+      SoilSensor newSensor2 = sensor2Value != null 
+          ? currentData.sensor.soilSensor2.copyWith(
+              value: sensor2Value,
+              lastUpdate: DateTime.now(),
+              isActive: true,
+            )
+          : currentData.sensor.soilSensor2;
+      
+      // Create updated SensorData object
       final sensorData = SensorData(
         sensor: Sensor(
-          soilSensor: SoilSensor(value: sensorValue),
+          soilSensor1: newSensor1,
+          soilSensor2: newSensor2,
         ),
       );
       
       // Update local state immediately for responsive UI
       _sensorData = sensorData;
       _lastSensorUpdate = DateTime.now();
-      print('✅ [MQTT→SENSOR] Local state updated: ${sensorData.sensor.soilSensor.value}% (${sensorData.sensor.soilSensor.condition})');
+      print('✅ [MQTT→SENSOR] Local state updated:');
+      print('   Sensor 1: ${newSensor1.value}% (${newSensor1.condition})');
+      print('   Sensor 2: ${newSensor2.value}% (${newSensor2.condition})');
+      print('   Average: ${sensorData.sensor.averageHumidity.toStringAsFixed(1)}% (${sensorData.sensor.overallCondition})');
       notifyListeners();
       
       // Queue for throttled Firebase save if auto-save is enabled
@@ -359,14 +398,44 @@ class GreenhouseProvider with ChangeNotifier {
     }
   }
 
-  // DATA VALIDATION HELPERS
+  // ENHANCED DATA VALIDATION HELPERS
   bool _isDataValid(Map<String, dynamic> data) {
     return data.isNotEmpty && data.containsKey('topic');
   }
 
-  double? _extractSensorValue(Map<String, dynamic> data) {
-    // Try different possible keys for sensor value
-    final possibleKeys = ['soil_humidity', 'soil_moisture', 'humidity', 'value'];
+  double? _extractSensorValue(Map<String, dynamic> data, String sensorId) {
+    // Try different possible keys for sensor value with sensor ID
+    final possibleKeys = [
+      '${sensorId}_value',
+      '${sensorId}_humidity', 
+      '${sensorId}_moisture',
+      'soil_humidity_$sensorId',
+      'soil_moisture_$sensorId',
+      'humidity_$sensorId',
+      'value_$sensorId',
+    ];
+    
+    // Also try generic keys if sensor_id is specified in data
+    if (data.containsKey('sensor_id') && data['sensor_id'] == sensorId) {
+      possibleKeys.addAll(['soil_humidity', 'soil_moisture', 'humidity', 'value']);
+    }
+    
+    // If no sensor ID specified in topic, try to determine from data structure
+    if (data.containsKey('sensors') && data['sensors'] is Map) {
+      final sensors = data['sensors'] as Map;
+      if (sensors.containsKey(sensorId)) {
+        final sensorData = sensors[sensorId];
+        if (sensorData is Map && sensorData.containsKey('value')) {
+          final value = sensorData['value'];
+          if (value is num) {
+            final doubleValue = value.toDouble();
+            if (doubleValue >= 0 && doubleValue <= 100) {
+              return doubleValue;
+            }
+          }
+        }
+      }
+    }
     
     for (final key in possibleKeys) {
       if (data.containsKey(key)) {
@@ -380,13 +449,30 @@ class GreenhouseProvider with ChangeNotifier {
         }
       }
     }
+    
+    // Fallback: if this is a generic sensor update, use for sensor_1
+    if (sensorId == 'sensor_1') {
+      final genericKeys = ['soil_humidity', 'soil_moisture', 'humidity', 'value'];
+      for (final key in genericKeys) {
+        if (data.containsKey(key)) {
+          final value = data[key];
+          if (value is num) {
+            final doubleValue = value.toDouble();
+            if (doubleValue >= 0 && doubleValue <= 100) {
+              return doubleValue;
+            }
+          }
+        }
+      }
+    }
+    
     return null;
   }
 
   bool? _extractPumpStatus(Map<String, dynamic> data) {
     // Try different possible keys for pump status
-    final boolKeys = ['active', 'is_active', 'isActive'];
-    final stringKeys = ['status', 'state'];
+    final boolKeys = ['active', 'is_active', 'isActive', 'pump_active'];
+    final stringKeys = ['status', 'state', 'pump_status', 'pump_state'];
     
     // Check boolean keys first
     for (final key in boolKeys) {
@@ -527,6 +613,56 @@ class GreenhouseProvider with ChangeNotifier {
     }
   }
 
+  // ENHANCED UTILITY METHODS FOR MULTI-SENSOR
+  
+  // Get sensor by ID
+  SoilSensor? getSensorById(String sensorId) {
+    if (_sensorData == null) return null;
+    
+    switch (sensorId) {
+      case 'sensor_1':
+        return _sensorData!.sensor.soilSensor1;
+      case 'sensor_2':
+        return _sensorData!.sensor.soilSensor2;
+      default:
+        return null;
+    }
+  }
+  
+  // Get all active sensors
+  List<SoilSensor> getActiveSensors() {
+    if (_sensorData == null) return [];
+    
+    return _sensorData!.sensor.allSensors
+        .where((sensor) => sensor.isActive && sensor.value > 0)
+        .toList();
+  }
+  
+  // Check if any sensor needs attention
+  bool get hasAnyAlerts {
+    if (_sensorData == null) return false;
+    
+    return _sensorData!.sensor.allSensors.any((sensor) => 
+        sensor.isActive && 
+        (sensor.value < 30 || sensor.value > 80)
+    );
+  }
+  
+  // Get sensor with highest/lowest values
+  SoilSensor? get driestsensor {
+    final activeSensors = getActiveSensors();
+    if (activeSensors.isEmpty) return null;
+    
+    return activeSensors.reduce((a, b) => a.value < b.value ? a : b);
+  }
+  
+  SoilSensor? get wettestSensor {
+    final activeSensors = getActiveSensors();
+    if (activeSensors.isEmpty) return null;
+    
+    return activeSensors.reduce((a, b) => a.value > b.value ? a : b);
+  }
+
   // SETTINGS AND UTILITY METHODS
   void toggleAutoSave() {
     _autoSaveToFirebase = !_autoSaveToFirebase;
@@ -560,7 +696,7 @@ class GreenhouseProvider with ChangeNotifier {
     }
   }
 
-  // TEST METHODS
+  // ENHANCED TEST METHODS
   Future<bool> testMqttPublish() async {
     try {
       if (!_isConnected) {
@@ -574,13 +710,13 @@ class GreenhouseProvider with ChangeNotifier {
     }
   }
 
-  Future<bool> publishTestSensorData() async {
+  Future<bool> publishTestSensorData({String sensorId = 'sensor_1'}) async {
     try {
       if (!_isConnected) return false;
       
       final testData = {
-        'soil_humidity': 55.0,
-        'sensor_id': 'test_sensor',
+        'sensor_id': sensorId,
+        '${sensorId}_value': sensorId == 'sensor_1' ? 55.0 : 62.0,
         'location': 'greenhouse',
         'timestamp': DateTime.now().millisecondsSinceEpoch,
       };
@@ -588,6 +724,26 @@ class GreenhouseProvider with ChangeNotifier {
       return await _mqttService.publishSensorData(testData);
     } catch (e) {
       print('❌ [TEST] Error publishing test sensor data: $e');
+      return false;
+    }
+  }
+
+  Future<bool> publishTestMultiSensorData() async {
+    try {
+      if (!_isConnected) return false;
+      
+      final testData = {
+        'sensors': {
+          'sensor_1': {'value': 45.5, 'is_active': true},
+          'sensor_2': {'value': 67.3, 'is_active': true},
+        },
+        'location': 'greenhouse',
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+      };
+      
+      return await _mqttService.publishSensorData(testData);
+    } catch (e) {
+      print('❌ [TEST] Error publishing multi-sensor test data: $e');
       return false;
     }
   }
