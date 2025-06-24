@@ -334,43 +334,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
       children: [
         Expanded(
           child: Text(
-            'Sensor History Charts',
+            'Riwayat Sensor',
             style: TextStyle(
               fontSize: 28,
               fontWeight: FontWeight.bold,
               color: AppColors.textPrimary,
             ),
-          ),
-        ),
-        Container(
-          padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            color: isConnected 
-                ? Colors.green.withOpacity(0.1) 
-                : Colors.grey.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  color: isConnected ? Colors.green : Colors.grey,
-                  shape: BoxShape.circle,
-                ),
-              ),
-              SizedBox(width: 6),
-              Text(
-                'MQTT',
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w600,
-                  color: isConnected ? Colors.green : Colors.grey,
-                ),
-              ),
-            ],
           ),
         ),
         SizedBox(width: 8),
@@ -541,24 +510,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
-        Container(
-          padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            color: color.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Text(
-            '$count points',
-            style: TextStyle(
-              fontSize: 12,
-              color: color,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ),
-        SizedBox(height: 4),
         Text(
-          'Current: ${latest.toStringAsFixed(1)}%',
+          'Current: ${latest.toInt()}', // Ubah dari persen ke integer
           style: TextStyle(
             fontSize: 12,
             color: AppColors.textSecondary,
@@ -583,9 +536,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceAround,
         children: [
-          _buildStatItem('Avg', '${average.toStringAsFixed(1)}%', color),
-          _buildStatItem('Min', '${minimum.toStringAsFixed(1)}%', Colors.orange),
-          _buildStatItem('Max', '${maximum.toStringAsFixed(1)}%', Colors.red),
+          _buildStatItem('Avg', '${average.toInt()}', color), // Ubah ke integer
+          _buildStatItem('Min', '${minimum.toInt()}', Colors.orange), // Ubah ke integer
+          _buildStatItem('Max', '${maximum.toInt()}', Colors.red), // Ubah ke integer
         ],
       ),
     );

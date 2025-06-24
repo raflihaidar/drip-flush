@@ -61,6 +61,25 @@ class SensorChart extends StatelessWidget {
       return _buildEmptyChart();
     }
 
+    // Calculate dynamic Y-axis range based on actual data
+    final values = chartData.map((spot) => spot.y).toList();
+    final minValue = values.isEmpty ? 0.0 : values.reduce((a, b) => a < b ? a : b);
+    final maxValue = values.isEmpty ? 4095.0 : values.reduce((a, b) => a > b ? a : b);
+    
+    // Add some padding to the range (15% padding for better spacing)
+    final range = maxValue - minValue;
+    final padding = range > 0 ? range * 0.15 : 300.0; // Increased padding
+    
+    final chartMinY = (minValue - padding).clamp(0.0, 4095.0);
+    final chartMaxY = (maxValue + padding).clamp(chartMinY + 200, 4095.0); // Ensure minimum range
+    
+    // Calculate appropriate interval for Y-axis
+    final yInterval = _calculateYInterval(chartMinY, chartMaxY);
+    
+    // Adjust chart bounds to align with grid lines - ensure nice round numbers
+    final adjustedMinY = (chartMinY / yInterval).floor() * yInterval;
+    final adjustedMaxY = (chartMaxY / yInterval).ceil() * yInterval;
+
     return Padding(
       padding: EdgeInsets.only(right: 16, top: 16),
       child: LineChart(
@@ -68,7 +87,7 @@ class SensorChart extends StatelessWidget {
           gridData: FlGridData(
             show: true,
             drawVerticalLine: true,
-            horizontalInterval: 20,
+            horizontalInterval: yInterval,
             verticalInterval: _getVerticalInterval(chartData),
             getDrawingHorizontalLine: (value) {
               return FlLine(
@@ -102,9 +121,9 @@ class SensorChart extends StatelessWidget {
             leftTitles: AxisTitles(
               sideTitles: SideTitles(
                 showTitles: true,
-                interval: 20,
-                reservedSize: 40,
-                getTitlesWidget: _getLeftTitleWidget,
+                interval: yInterval,
+                reservedSize: 60, // Increased even more for better spacing
+                getTitlesWidget: (value, meta) => _getLeftTitleWidget(value, meta),
               ),
             ),
           ),
@@ -117,8 +136,8 @@ class SensorChart extends StatelessWidget {
           ),
           minX: chartData.isNotEmpty ? chartData.first.x : 0,
           maxX: chartData.isNotEmpty ? chartData.last.x : 1,
-          minY: 0,
-          maxY: 100,
+          minY: adjustedMinY,
+          maxY: adjustedMaxY,
           lineBarsData: [
             LineChartBarData(
               spots: chartData,
@@ -164,11 +183,11 @@ class SensorChart extends StatelessWidget {
               getTooltipItems: (List<LineBarSpot> touchedBarSpots) {
                 return touchedBarSpots.map((barSpot) {
                   final dataPoint = _findDataPointByX(barSpot.x);
-                  final value = barSpot.y.toStringAsFixed(1);
+                  final value = barSpot.y.toInt(); // Show as integer, no decimals
                   final time = dataPoint != null ? _formatTooltipTime(dataPoint) : '';
                   
                   return LineTooltipItem(
-                    '$value%\n$time',
+                    '$value\n$time', // Removed % symbol
                     TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.bold,
@@ -184,7 +203,31 @@ class SensorChart extends StatelessWidget {
     );
   }
 
-  // FIXED: Proper data preparation with safe timestamp handling
+  // Calculate appropriate Y-axis interval based on data range
+  double _calculateYInterval(double minY, double maxY) {
+    final range = maxY - minY;
+    
+    // Prevent too small intervals that cause overlapping
+    if (range <= 0) return 500; // Default fallback
+    
+    // Calculate ideal number of intervals (4-5 lines to prevent crowding)
+    final targetIntervals = 4;
+    double rawInterval = range / targetIntervals;
+    
+    // Round to nice numbers with bigger steps to prevent overlap
+    if (rawInterval <= 50) return 100;      // Minimum 100 to prevent overlap
+    if (rawInterval <= 100) return 200;
+    if (rawInterval <= 200) return 250;
+    if (rawInterval <= 250) return 500;
+    if (rawInterval <= 500) return 500;
+    if (rawInterval <= 750) return 1000;
+    if (rawInterval <= 1000) return 1000;
+    
+    // For very large ranges, use even bigger intervals
+    return (rawInterval / 1000).ceil() * 1000.0;
+  }
+
+  // FIXED: Proper data preparation for raw integer values (0-4095)
   List<FlSpot> _prepareChartData() {
     if (historicalData == null || historicalData!.isEmpty) {
       return [];
@@ -193,7 +236,7 @@ class SensorChart extends StatelessWidget {
     print('📊 [CHART] Starting chart data preparation...');
     print('📊 [CHART] Raw data count: ${historicalData!.length}');
 
-    // Step 1: Convert and validate data with safe timestamp extraction
+    // Step 1: Convert and validate data with safe timestamp handling
     final validEntries = <Map<String, dynamic>>[];
     
     for (final entry in historicalData!) {
@@ -263,8 +306,8 @@ class SensorChart extends StatelessWidget {
           }
         }
 
-        // Validate both timestamp and value
-        if (timestamp != null && value != null && value >= 0 && value <= 100) {
+        // CHANGED: Validate for raw sensor values (0-4095) instead of percentage (0-100)
+        if (timestamp != null && value != null && value >= 0 && value <= 4095) {
           validEntries.add({
             'timestamp': timestamp,
             'value': value,
@@ -350,7 +393,8 @@ class SensorChart extends StatelessWidget {
           value = (entry['y'] as num).toDouble();
         }
 
-        if (timestamp != null && value != null && value >= 0 && value <= 100) {
+        // CHANGED: Validate for raw sensor values (0-4095)
+        if (timestamp != null && value != null && value >= 0 && value <= 4095) {
           validEntries.add({
             'timestamp': timestamp,
             'value': value,
@@ -465,13 +509,41 @@ class SensorChart extends StatelessWidget {
     );
   }
 
+  // CHANGED: Remove % symbol and show raw integer values with better spacing
   Widget _getLeftTitleWidget(double value, TitleMeta meta) {
-    return Text(
-      '${value.toInt()}%',
-      style: TextStyle(
-        color: Colors.grey[600] ?? Colors.grey,
-        fontWeight: FontWeight.w400,
-        fontSize: 10,
+    // Get the current chart's data to calculate proper interval
+    final chartData = _prepareChartData();
+    if (chartData.isEmpty) return SizedBox.shrink();
+    
+    // Calculate dynamic Y-axis range based on actual data (same as in _buildChart)
+    final values = chartData.map((spot) => spot.y).toList();
+    final minValue = values.isEmpty ? 0.0 : values.reduce((a, b) => a < b ? a : b);
+    final maxValue = values.isEmpty ? 4095.0 : values.reduce((a, b) => a > b ? a : b);
+    
+    final range = maxValue - minValue;
+    final padding = range > 0 ? range * 0.15 : 300.0;
+    
+    final chartMinY = (minValue - padding).clamp(0.0, 4095.0);
+    final chartMaxY = (maxValue + padding).clamp(chartMinY + 200, 4095.0);
+    
+    // Use the actual interval for this chart's data range
+    final interval = _calculateYInterval(chartMinY, chartMaxY);
+    
+    // Check if this value aligns with our calculated interval
+    if ((value % interval).abs() > 0.1) {
+      return SizedBox.shrink(); // Hide non-aligned labels
+    }
+    
+    return SideTitleWidget(
+      axisSide: meta.axisSide,
+      space: 8, // Add space between label and axis
+      child: Text(
+        '${value.toInt()}', // Removed % symbol
+        style: TextStyle(
+          color: Colors.grey[600] ?? Colors.grey,
+          fontWeight: FontWeight.w400,
+          fontSize: 10,
+        ),
       ),
     );
   }

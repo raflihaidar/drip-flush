@@ -25,11 +25,11 @@ class _HomeScreenState extends State<HomeScreen> {
   final String _weatherCondition = 'Cerah';
   final int _weatherHumidity = 45;
   
-  // Pelacakan min/max 24 jam untuk kedua sensor
-  double _maxHumidity24h_sensor1 = 0.0;
-  double _minHumidity24h_sensor1 = 100.0;
-  double _maxHumidity24h_sensor2 = 0.0;
-  double _minHumidity24h_sensor2 = 100.0;
+  // Pelacakan min/max 24 jam untuk kedua sensor (ubah ke int)
+  int _maxHumidity24h_sensor1 = 0;
+  int _minHumidity24h_sensor1 = 9999;
+  int _maxHumidity24h_sensor2 = 0;
+  int _minHumidity24h_sensor2 = 9999;
 
   @override
   void initState() {
@@ -99,15 +99,15 @@ class _HomeScreenState extends State<HomeScreen> {
           if (sensorData is Map && sensorData.containsKey('value')) {
             final value = sensorData['value'];
             if (value is num) {
-              print('🌱 Memproses sensor $sensorId nilai: ${value.toDouble()}%');
+              print('🌱 Memproses sensor $sensorId nilai: ${value.toInt()}');
               
               if (mounted) {
                 setState(() {
                   // Update min/max untuk sensor yang sesuai
                   if (sensorId == 'sensor_1') {
-                    _updateMinMaxHumidity(value.toDouble(), true);
+                    _updateMinMaxHumidity(value.toInt(), true);
                   } else if (sensorId == 'sensor_2') {
-                    _updateMinMaxHumidity(value.toDouble(), false);
+                    _updateMinMaxHumidity(value.toInt(), false);
                   }
                 });
               }
@@ -122,14 +122,14 @@ class _HomeScreenState extends State<HomeScreen> {
         final value = data['value'];
         
         if (sensorId != null && value is num) {
-          print('🌱 Memproses $sensorId nilai: ${value.toDouble()}%');
+          print('🌱 Memproses $sensorId nilai: ${value.toInt()}');
           
           if (mounted) {
             setState(() {
               if (sensorId == 'sensor_1') {
-                _updateMinMaxHumidity(value.toDouble(), true);
+                _updateMinMaxHumidity(value.toInt(), true);
               } else if (sensorId == 'sensor_2') {
-                _updateMinMaxHumidity(value.toDouble(), false);
+                _updateMinMaxHumidity(value.toInt(), false);
               }
             });
           }
@@ -140,10 +140,10 @@ class _HomeScreenState extends State<HomeScreen> {
       if (data.containsKey('soil_humidity')) {
         final humidity = data['soil_humidity'];
         if (humidity is num) {
-          print('🌱 Memproses kelembaban tanah legacy: ${humidity.toDouble()}%');
+          print('🌱 Memproses kelembaban tanah legacy: ${humidity.toInt()}');
           if (mounted) {
             setState(() {
-              _updateMinMaxHumidity(humidity.toDouble(), true); // Default ke sensor 1
+              _updateMinMaxHumidity(humidity.toInt(), true); // Default ke sensor 1
             });
           }
         }
@@ -213,20 +213,20 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  void _updateMinMaxHumidity(double humidity, bool isSensor1) {
+  void _updateMinMaxHumidity(int humidity, bool isSensor1) {
     if (humidity > 0) {
       if (isSensor1) {
-        if (_maxHumidity24h_sensor1 == 0.0 || humidity > _maxHumidity24h_sensor1) {
+        if (_maxHumidity24h_sensor1 == 0 || humidity > _maxHumidity24h_sensor1) {
           _maxHumidity24h_sensor1 = humidity;
         }
-        if (_minHumidity24h_sensor1 == 100.0 || humidity < _minHumidity24h_sensor1) {
+        if (_minHumidity24h_sensor1 == 9999 || humidity < _minHumidity24h_sensor1) {
           _minHumidity24h_sensor1 = humidity;
         }
       } else {
-        if (_maxHumidity24h_sensor2 == 0.0 || humidity > _maxHumidity24h_sensor2) {
+        if (_maxHumidity24h_sensor2 == 0 || humidity > _maxHumidity24h_sensor2) {
           _maxHumidity24h_sensor2 = humidity;
         }
-        if (_minHumidity24h_sensor2 == 100.0 || humidity < _minHumidity24h_sensor2) {
+        if (_minHumidity24h_sensor2 == 9999 || humidity < _minHumidity24h_sensor2) {
           _minHumidity24h_sensor2 = humidity;
         }
       }
@@ -282,14 +282,12 @@ class _HomeScreenState extends State<HomeScreen> {
       body: SafeArea(
         child: Consumer<GreenhouseProvider>(
           builder: (context, provider, child) {
-            // Ambil data sensor untuk kedua sensor
-            final sensor1Humidity = provider.sensor1Humidity ?? 0.0;
-            final sensor2Humidity = provider.sensor2Humidity ?? 0.0;
-            final averageHumidity = provider.currentSoilHumidity ?? 0.0;
+            // Ambil data sensor untuk kedua sensor dan konversi ke int
+            final sensor1Humidity = (provider.sensor1Humidity ?? 0.0).toInt();
+            final sensor2Humidity = (provider.sensor2Humidity ?? 0.0).toInt();
             
             final sensor1Condition = provider.sensor1Condition ?? 'Tidak Ada Data';
             final sensor2Condition = provider.sensor2Condition ?? 'Tidak Ada Data';
-            final overallCondition = provider.overallCondition ?? 'Tidak Ada Data';
             
             final sensor1Active = provider.sensor1Active ?? false;
             final sensor2Active = provider.sensor2Active ?? false;
@@ -455,70 +453,6 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                         // Indikator status sensor
                         const SizedBox(height: 8),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            // Indikator Sensor 1
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: sensor1Active 
-                                    ? Colors.green.shade100 
-                                    : Colors.grey.shade100,
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    Icons.sensors,
-                                    size: 10,
-                                    color: sensor1Active ? Colors.green : Colors.grey,
-                                  ),
-                                  const SizedBox(width: 2),
-                                  Text(
-                                    'S1',
-                                    style: TextStyle(
-                                      fontSize: 10,
-                                      color: sensor1Active ? Colors.green : Colors.grey,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            // Indikator Sensor 2
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: sensor2Active 
-                                    ? Colors.green.shade100 
-                                    : Colors.grey.shade100,
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    Icons.sensors,
-                                    size: 10,
-                                    color: sensor2Active ? Colors.green : Colors.grey,
-                                  ),
-                                  const SizedBox(width: 2),
-                                  Text(
-                                    'S2',
-                                    style: TextStyle(
-                                      fontSize: 10,
-                                      color: sensor2Active ? Colors.green : Colors.grey,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
                         // Tampilkan indikator loading jika provider sedang loading
                         if (provider.isLoading || _isConnecting)
                           const Padding(
@@ -545,321 +479,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       ],
                     ),
                   ),
-                  
-                  // Jarak putih
-                  const SizedBox(height: 10),
-                  
-                  // Card cuaca
-                  Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 15),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(12),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.1),
-                          blurRadius: 4,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: Column(
-                      children: [
-                        // Baris lokasi dan tanggal
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(15, 12, 15, 8),
-                          child: Row(
-                            children: [
-                              // Lokasi dengan ikon
-                              Row(
-                                children: const [
-                                  Icon(
-                                    Icons.location_on_outlined,
-                                    size: 16,
-                                    color: Colors.black87,
-                                  ),
-                                  SizedBox(width: 4),
-                                  Text(
-                                    'Jambangan, Indonesia',
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const Spacer(),
-                              // Tanggal dan waktu
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.end,
-                                children: [
-                                  Text(
-                                    formattedDate,
-                                    style: const TextStyle(
-                                      fontSize: 12,
-                                      color: Colors.black87,
-                                    ),
-                                  ),
-                                  Text(
-                                    formattedTime,
-                                    style: const TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                        
-                        // Kondisi cuaca
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(15, 8, 15, 8),
-                          child: Row(
-                            children: [
-                              // Ikon dan status kondisi cuaca
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Icon(
-                                    Icons.wb_sunny,
-                                    color: Colors.orange,
-                                    size: 32,
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    _weatherCondition,
-                                    style: const TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  // Kelembaban cuaca
-                                  Text(
-                                    'Kelembaban: ${_weatherHumidity}%',
-                                    style: const TextStyle(
-                                      fontSize: 14,
-                                      color: Colors.black87,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const Spacer(),
-                              // Suhu cuaca saat ini
-                              Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    _weatherTemperature.toStringAsFixed(0),
-                                    style: const TextStyle(
-                                      fontSize: 64,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                  const Text(
-                                    '°C',
-                                    style: TextStyle(
-                                      fontSize: 24,
-                                      fontWeight: FontWeight.w500,
-                                      height: 1.5,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                        
-                        // Info cuaca
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
-                          decoration: BoxDecoration(
-                            color: Colors.green.shade50,
-                            border: Border(
-                              top: BorderSide(
-                                color: Colors.grey.shade200,
-                                width: 1,
-                              ),
-                            ),
-                          ),
-                          child: const Row(
-                            children: [
-                              Text(
-                                'Data Cuaca - Area Jambangan',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                              Spacer(),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  
-                  // Jarak putih
-                  const SizedBox(height: 10),
-                  
-                  // Card kondisi kelembaban tanah rata-rata
-                  Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 15),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(12),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.1),
-                          blurRadius: 4,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: Column(
-                      children: [
-                        // Header kondisi kelembaban tanah rata-rata
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(15, 12, 15, 8),
-                          child: Row(
-                            children: [
-                              const Text(
-                                'Kelembaban Tanah Rata-rata',
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                              ),
-                              const Spacer(),
-                              Icon(
-                                Icons.analytics,
-                                color: Colors.blue.shade600,
-                                size: 20,
-                              ),
-                            ],
-                          ),
-                        ),
-                        
-                        // Tampilan kelembaban tanah rata-rata
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(15, 8, 15, 8),
-                          child: Row(
-                            children: [
-                              // Ikon dan status kondisi keseluruhan
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Icon(
-                                    _getOverallConditionIcon(averageHumidity),
-                                    color: _getOverallConditionColor(averageHumidity),
-                                    size: 32,
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    _translateCondition(overallCondition),
-                                    style: const TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              const Spacer(),
-                              // Kelembaban tanah rata-rata
-                              Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    averageHumidity == 0.0 ? '0.0' : averageHumidity.toStringAsFixed(1),
-                                    style: TextStyle(
-                                      fontSize: 64,
-                                      fontWeight: FontWeight.w500,
-                                      color: averageHumidity == 0.0 ? Colors.grey : Colors.black,
-                                    ),
-                                  ),
-                                  Text(
-                                    '%',
-                                    style: TextStyle(
-                                      fontSize: 24,
-                                      fontWeight: FontWeight.w500,
-                                      height: 1.5,
-                                      color: averageHumidity == 0.0 ? Colors.grey : Colors.black,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                        
-                        // Info sensor
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 12),
-                          decoration: BoxDecoration(
-                            color: Colors.blue.shade50,
-                            border: Border(
-                              top: BorderSide(
-                                color: Colors.grey.shade200,
-                                width: 1,
-                              ),
-                            ),
-                          ),
-                          child: Row(
-                            children: [
-                              const Text(
-                                'Multi-Sensor - Firebase Terhubung',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                              const Spacer(),
-                              // Indikator status koneksi
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                decoration: BoxDecoration(
-                                  color: isConnected 
-                                    ? Colors.green.shade100 
-                                    : (_isConnecting 
-                                        ? Colors.blue.shade100
-                                        : Colors.orange.shade100),
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(
-                                      Icons.circle,
-                                      size: 8,
-                                      color: isConnected 
-                                        ? Colors.green 
-                                        : (_isConnecting ? Colors.blue : Colors.orange),
-                                    ),
-                                    const SizedBox(width: 4),
-                                    Text(
-                                      isConnected 
-                                        ? 'ONLINE' 
-                                        : (_isConnecting ? 'MENGHUBUNGKAN' : 'OFFLINE'),
-                                      style: TextStyle(
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.w600,
-                                        color: isConnected 
-                                          ? Colors.green 
-                                          : (_isConnecting ? Colors.blue : Colors.orange),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  
+                 
                   // Jarak putih
                   const SizedBox(height: 10),
                   
@@ -872,8 +492,8 @@ class _HomeScreenState extends State<HomeScreen> {
                         sensor1Humidity,
                         sensor1Condition,
                         sensor1Active,
-                        _maxHumidity24h_sensor1 > 0.0 
-                            ? '24j: ${_minHumidity24h_sensor1.toStringAsFixed(1)}% - ${_maxHumidity24h_sensor1.toStringAsFixed(1)}%'
+                        _maxHumidity24h_sensor1 > 0 
+                            ? '24j: ${_minHumidity24h_sensor1} - ${_maxHumidity24h_sensor1}'
                             : null,
                         Colors.blue,
                       ),
@@ -887,8 +507,8 @@ class _HomeScreenState extends State<HomeScreen> {
                         sensor2Humidity,
                         sensor2Condition,
                         sensor2Active,
-                        _maxHumidity24h_sensor2 > 0.0 
-                            ? '24j: ${_minHumidity24h_sensor2.toStringAsFixed(1)}% - ${_maxHumidity24h_sensor2.toStringAsFixed(1)}%'
+                        _maxHumidity24h_sensor2 > 0 
+                            ? '24j: ${_minHumidity24h_sensor2} - ${_maxHumidity24h_sensor2}'
                             : null,
                         Colors.green,
                       ),
@@ -909,7 +529,7 @@ class _HomeScreenState extends State<HomeScreen> {
   // Helper method untuk membuat card sensor besar seperti average soil humidity
   Widget _buildSensorCardLarge(
     String sensorName,
-    double humidity,
+    int humidity,
     String condition,
     bool isActive,
     String? range24h,
@@ -974,41 +594,17 @@ class _HomeScreenState extends State<HomeScreen> {
                         fontWeight: FontWeight.w500,
                       ),
                     ),
-                    const SizedBox(height: 4),
-                    // Range 24 jam jika tersedia
-                    if (range24h != null)
-                      Text(
-                        range24h,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Colors.grey,
-                        ),
-                      ),
                   ],
                 ),
                 const Spacer(),
-                // Kelembaban sensor
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      humidity == 0.0 ? '0.0' : humidity.toStringAsFixed(1),
-                      style: TextStyle(
-                        fontSize: 64,
-                        fontWeight: FontWeight.w500,
-                        color: humidity == 0.0 ? Colors.grey : themeColor,
-                      ),
-                    ),
-                    Text(
-                      '%',
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w500,
-                        height: 1.5,
-                        color: humidity == 0.0 ? Colors.grey : themeColor,
-                      ),
-                    ),
-                  ],
+                // Kelembaban sensor (tanpa % dan integer)
+                Text(
+                  humidity == 0 ? '0' : humidity.toString(),
+                  style: TextStyle(
+                    fontSize: 64,
+                    fontWeight: FontWeight.w500,
+                    color: humidity == 0 ? Colors.grey : themeColor,
+                  ),
                 ),
               ],
             ),
@@ -1071,31 +667,6 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
     );
-  }
-
-  // Ambil ikon kondisi keseluruhan berdasarkan kelembaban rata-rata
-  IconData _getOverallConditionIcon(double humidity) {
-    if (humidity == 0.0) {
-      return Icons.help_outline; // Tidak ada data
-    } else if (humidity < 40) {
-      return Icons.warning; // Kering
-    } else if (humidity > 70) {
-      return Icons.water_drop; // Terlalu basah
-    } else {
-      return Icons.eco; // Optimal
-    }
-  }
-
-  Color _getOverallConditionColor(double humidity) {
-    if (humidity == 0.0) {
-      return Colors.grey; // Tidak ada data
-    } else if (humidity < 40) {
-      return Colors.orange; // Kering
-    } else if (humidity > 70) {
-      return Colors.blue; // Terlalu basah
-    } else {
-      return Colors.green; // Optimal
-    }
   }
 
   // Ambil ikon kondisi sensor berdasarkan kondisi
