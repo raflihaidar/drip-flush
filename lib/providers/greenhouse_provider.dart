@@ -1,9 +1,45 @@
 import 'package:flutter/foundation.dart';
 import 'dart:async';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 import '../models/sensor_data.dart';
 import '../models/pump_status.dart';
 import '../services/firebase_service.dart';
 import '../services/mqtt_service.dart'; // Your existing MQTT service
+
+// Weather Data Models
+class WeatherData {
+  final double temperature;
+  final String condition;
+  final String description;
+  final int humidity;
+  final String cityName;
+  final String icon;
+
+  WeatherData({
+    required this.temperature,
+    required this.condition,
+    required this.description,
+    required this.humidity,
+    required this.cityName,
+    required this.icon,
+  });
+
+  factory WeatherData.fromJson(Map<String, dynamic> json) {
+    final data = json['data'];
+    final weather = data['weather'][0];
+    final main = data['main'];
+    
+    return WeatherData(
+      temperature: main['temp'].toDouble(),
+      condition: weather['main'],
+      description: weather['description'],
+      humidity: main['humidity'],
+      cityName: data['name'],
+      icon: weather['icon'],
+    );
+  }
+}
 
 class GreenhouseProvider with ChangeNotifier {
   // Services (Firebase + MQTT for pump control)
@@ -13,19 +49,26 @@ class GreenhouseProvider with ChangeNotifier {
   // State variables
   SensorData? _sensorData;
   PumpStatus? _pumpStatus;
+  WeatherData? _weatherData; // Add weather data state
   bool _isFirebaseConnected = false;
   bool _isMqttConnected = false;
   bool _isLoading = false;
+  bool _isWeatherLoading = false; // Add weather loading state
   String? _errorMessage;
+  String? _weatherErrorMessage; // Add weather error state
   
   // Last update tracking
   DateTime? _lastSensorUpdate;
   DateTime? _lastPumpUpdate;
+  DateTime? _lastWeatherUpdate; // Add weather update tracking
   
   // Stream subscriptions for cleanup
   StreamSubscription<SensorData>? _firebaseSensorSubscription;
   StreamSubscription<PumpStatus>? _firebasePumpSubscription;
   StreamSubscription<Map<String, dynamic>>? _mqttDataSubscription; // Use your existing MQTT stream
+
+  // Weather API Timer
+  Timer? _weatherRefreshTimer;
 
   // Constructor
   GreenhouseProvider() {
@@ -36,13 +79,17 @@ class GreenhouseProvider with ChangeNotifier {
   // Getters
   SensorData? get sensorData => _sensorData;
   PumpStatus? get pumpStatus => _pumpStatus;
+  WeatherData? get weatherData => _weatherData; // Add weather getter
   bool get isConnected => _isFirebaseConnected && _isMqttConnected; // Both must be connected
   bool get isFirebaseConnected => _isFirebaseConnected;
   bool get isMqttConnected => _isMqttConnected;
   bool get isLoading => _isLoading;
+  bool get isWeatherLoading => _isWeatherLoading; // Add weather loading getter
   String? get errorMessage => _errorMessage;
+  String? get weatherErrorMessage => _weatherErrorMessage; // Add weather error getter
   DateTime? get lastSensorUpdate => _lastSensorUpdate;
   DateTime? get lastPumpUpdate => _lastPumpUpdate;
+  DateTime? get lastWeatherUpdate => _lastWeatherUpdate; // Add weather update getter
   
   // Enhanced getters for multi-sensor support
   double? get currentSoilHumidity => _sensorData?.sensor.averageHumidity;
@@ -59,6 +106,14 @@ class GreenhouseProvider with ChangeNotifier {
   bool? get isPumpActive => _pumpStatus?.pump.waterPump.isActive;
   String? get currentPumpStatus => _pumpStatus?.pump.waterPump.isActive == true ? 'ON' : 'OFF';
 
+  // Weather getters with fallback to default values
+  double get currentTemperature => _weatherData?.temperature ?? 40.0;
+  String get currentWeatherCondition => _weatherData?.condition ?? 'Cerah';
+  String get currentWeatherDescription => _weatherData?.description ?? 'Cerah';
+  int get currentWeatherHumidity => _weatherData?.humidity ?? 45;
+  String get currentCityName => _weatherData?.cityName ?? 'Jambangan, Indonesia';
+  String get currentWeatherIcon => _weatherData?.icon ?? '01d';
+
   // Backward compatibility
   double? get currentSoilHumidityLegacy => sensor1Humidity;
   String? get soilCondition => overallCondition;
@@ -67,7 +122,7 @@ class GreenhouseProvider with ChangeNotifier {
     _setLoading(true);
     
     try {
-      print('🚀 [INIT] Starting GreenhouseProvider initialization (Firebase + MQTT)...');
+      print('🚀 [INIT] Starting GreenhouseProvider initialization (Firebase + MQTT + Weather)...');
       
       // Initialize Firebase
       print('🔥 [INIT] Initializing Firebase...');
@@ -80,6 +135,10 @@ class GreenhouseProvider with ChangeNotifier {
       await _mqttService.prepareMqttClient();
       _isMqttConnected = _mqttService.isConnected;
       print('✅ [INIT] MQTT initialized successfully');
+
+      // Initialize Weather API
+      print('🌤️ [INIT] Fetching weather data...');
+      await fetchWeatherData();
       
       // Test connections
       print('🧪 [INIT] Testing connections...');
@@ -93,9 +152,12 @@ class GreenhouseProvider with ChangeNotifier {
       // Load initial data from Firebase
       print('📚 [INIT] Loading initial data from Firebase...');
       await _loadInitialData();
+
+      // Setup weather refresh timer (every 30 minutes)
+      _setupWeatherRefreshTimer();
       
       _clearError();
-      print('🎉 [INIT] Initialization completed successfully (Firebase + MQTT)');
+      print('🎉 [INIT] Initialization completed successfully (Firebase + MQTT + Weather)');
       
     } catch (e) {
       print('💥 [INIT] Initialization error: $e');
@@ -105,6 +167,71 @@ class GreenhouseProvider with ChangeNotifier {
     } finally {
       _setLoading(false);
     }
+  }
+
+  // WEATHER API METHODS
+  Future<void> fetchWeatherData() async {
+    if (_isWeatherLoading) return;
+    
+    _setWeatherLoading(true);
+    _clearWeatherError();
+    
+    try {
+      print('🌤️ [WEATHER] Fetching weather data from API...');
+      
+      final response = await http.get(
+        Uri.parse('https://binatra.id/api/v1/cuaca'),
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      ).timeout(Duration(seconds: 10));
+      
+      print('🌤️ [WEATHER] Response status: ${response.statusCode}');
+      
+      if (response.statusCode == 200) {
+        final jsonResponse = json.decode(response.body);
+        print('🌤️ [WEATHER] Response data: $jsonResponse');
+        
+        final weatherData = WeatherData.fromJson(jsonResponse);
+        
+        _weatherData = weatherData;
+        _lastWeatherUpdate = DateTime.now();
+        
+        print('✅ [WEATHER] Weather data updated successfully:');
+        print('   Temperature: ${weatherData.temperature}°C');
+        print('   Condition: ${weatherData.condition}');
+        print('   Humidity: ${weatherData.humidity}%');
+        print('   City: ${weatherData.cityName}');
+        
+        notifyListeners();
+      } else {
+        throw Exception('Failed to load weather data: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('❌ [WEATHER] Error fetching weather data: $e');
+      _setWeatherError('Failed to fetch weather data: $e');
+      
+      // Keep existing weather data if available
+      if (_weatherData == null) {
+        // Set default values only if no previous data exists
+        print('ℹ️ [WEATHER] Using default weather values');
+      }
+    } finally {
+      _setWeatherLoading(false);
+    }
+  }
+
+  void _setupWeatherRefreshTimer() {
+    // Cancel existing timer
+    _weatherRefreshTimer?.cancel();
+    
+    // Setup new timer to refresh weather every 30 minutes
+    _weatherRefreshTimer = Timer.periodic(const Duration(minutes: 30), (timer) {
+      print('⏰ [WEATHER] Auto-refreshing weather data...');
+      fetchWeatherData();
+    });
+    
+    print('⏰ [WEATHER] Weather auto-refresh timer setup (30 minutes interval)');
   }
 
   // FIREBASE LISTENER SETUP
@@ -454,8 +581,9 @@ class GreenhouseProvider with ChangeNotifier {
   // DATA REFRESH AND CONNECTION MANAGEMENT
   Future<void> refreshData() async {
     if (!_isLoading) {
-      print('🔄 [REFRESH] Refreshing data from Firebase...');
+      print('🔄 [REFRESH] Refreshing data from Firebase and Weather...');
       await _loadInitialData();
+      await fetchWeatherData(); // Also refresh weather data
     }
   }
 
@@ -479,6 +607,11 @@ class GreenhouseProvider with ChangeNotifier {
       _isMqttConnected = false;
       notifyListeners();
     }
+  }
+
+  // Force refresh weather data
+  Future<void> refreshWeatherData() async {
+    await fetchWeatherData();
   }
 
   // TEST METHODS
@@ -512,22 +645,15 @@ class GreenhouseProvider with ChangeNotifier {
     }
   }
 
-  Future<bool> testPumpControl() async {
+  Future<bool> testWeatherApi() async {
     try {
-      print('🧪 [TEST] Testing pump control...');
-      
-      // Toggle pump state
-      final currentState = _pumpStatus?.pump.waterPump.isActive ?? false;
-      await controlPump(!currentState);
-      
-      // Wait a bit then toggle back
-      await Future.delayed(Duration(seconds: 2));
-      await controlPump(currentState);
-      
-      print('✅ [TEST] Pump control test completed');
-      return true;
+      print('🧪 [TEST] Testing Weather API...');
+      await fetchWeatherData();
+      final success = _weatherData != null && _weatherErrorMessage == null;
+      print('${success ? "✅" : "❌"} [TEST] Weather API test result: $success');
+      return success;
     } catch (e) {
-      print('❌ [TEST] Pump control test failed: $e');
+      print('❌ [TEST] Weather API test failed: $e');
       return false;
     }
   }
@@ -554,6 +680,13 @@ class GreenhouseProvider with ChangeNotifier {
     return _isFirebaseConnected ? 'Connected' : 'Disconnected';
   }
 
+  String get weatherStatusText {
+    if (_isWeatherLoading) return 'Loading...';
+    if (_weatherErrorMessage != null) return 'Error';
+    if (_weatherData != null) return 'Connected';
+    return 'Disconnected';
+  }
+
   // DATA FRESHNESS CHECK
   bool get isSensorDataFresh {
     if (_lastSensorUpdate == null) return false;
@@ -569,10 +702,24 @@ class GreenhouseProvider with ChangeNotifier {
     return difference.inMinutes < 5; // Consider fresh if updated within 5 minutes
   }
 
+  bool get isWeatherDataFresh {
+    if (_lastWeatherUpdate == null) return false;
+    final now = DateTime.now();
+    final difference = now.difference(_lastWeatherUpdate!);
+    return difference.inMinutes < 60; // Consider fresh if updated within 60 minutes
+  }
+
   // UTILITY METHODS
   void _setLoading(bool loading) {
     if (_isLoading != loading) {
       _isLoading = loading;
+      notifyListeners();
+    }
+  }
+
+  void _setWeatherLoading(bool loading) {
+    if (_isWeatherLoading != loading) {
+      _isWeatherLoading = loading;
       notifyListeners();
     }
   }
@@ -583,9 +730,22 @@ class GreenhouseProvider with ChangeNotifier {
     notifyListeners();
   }
 
+  void _setWeatherError(String error) {
+    print('❌ [WEATHER-ERROR] Setting weather error: $error');
+    _weatherErrorMessage = error;
+    notifyListeners();
+  }
+
   void _clearError() {
     if (_errorMessage != null) {
       _errorMessage = null;
+      notifyListeners();
+    }
+  }
+
+  void _clearWeatherError() {
+    if (_weatherErrorMessage != null) {
+      _weatherErrorMessage = null;
       notifyListeners();
     }
   }
@@ -598,6 +758,7 @@ class GreenhouseProvider with ChangeNotifier {
     _firebaseSensorSubscription?.cancel();
     _firebasePumpSubscription?.cancel();
     _mqttDataSubscription?.cancel();
+    _weatherRefreshTimer?.cancel(); // Cancel weather timer
     
     // Dispose services
     try {
