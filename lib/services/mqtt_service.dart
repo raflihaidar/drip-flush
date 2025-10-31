@@ -9,19 +9,27 @@ class MqttService {
   bool _isConnected = false;
   StreamController<Map<String, dynamic>>? _dataController;
   StreamSubscription? _messageSubscription;
-  
-  // HiveMQ Cloud settings
-  static const String _broker = 'e1ba2dc5f46b4b46a15520b16e2bebc2.s1.eu.hivemq.cloud';
-  static const int _port = 8883;
+
+  // MQTT Broker settings - Multiple configurations to try
+  static const String _broker = 'mqtt.binatra.id';
   static const String _username = 'drip_flush_app';
   static const String _password = 'TeluJuara1';
   static const String _clientId = 'greenhouse_flutter_client';
-  
+
   // Topics
   static const String _sensorDataTopic = 'greenhouse/sensors/data';
   static const String _pumpControlTopic = 'greenhouse/control/pump';
   static const String _pumpStatusTopic = 'greenhouse/pump/status';
-  
+
+  // Connection configurations to try
+  final List<Map<String, dynamic>> _connectionConfigs = [
+    {
+      'port': 1883,
+      'secure': false,
+      'description': 'Standard MQTT (non-secure)',
+    },
+  ];
+
   // Getter untuk data stream dengan null check
   Stream<Map<String, dynamic>> get dataStream {
     _ensureStreamController();
@@ -52,67 +60,135 @@ class MqttService {
   }
 
   Future<bool> prepareMqttClient() async {
+    print('🔄 Starting MQTT connection process...');
+    
+    // Try each configuration until one works
+    for (int i = 0; i < _connectionConfigs.length; i++) {
+      final config = _connectionConfigs[i];
+      print('🔧 Trying configuration ${i + 1}/${_connectionConfigs.length}: ${config['description']}');
+      
+      bool success = await _tryConnection(
+        port: config['port'],
+        secure: config['secure'],
+        configDescription: config['description'],
+      );
+      
+      if (success) {
+        print('✅ Successfully connected with configuration: ${config['description']}');
+        return true;
+      }
+      
+      // Wait before trying next configuration
+      if (i < _connectionConfigs.length - 1) {
+        print('⏳ Waiting 2 seconds before trying next configuration...');
+        await Future.delayed(Duration(seconds: 2));
+      }
+    }
+    
+    print('❌ All connection configurations failed');
+    return false;
+  }
+
+  Future<bool> _tryConnection({
+    required int port,
+    required bool secure,
+    required String configDescription,
+  }) async {
     try {
+      print('🔌 Attempting connection to $_broker:$port (secure: $secure)');
+      
       // Ensure fresh StreamController
       _ensureStreamController();
-      
+
+      // Dispose previous client if exists
+      if (_client != null) {
+        try {
+          _client!.disconnect();
+        } catch (e) {
+          print('⚠️ Error disconnecting previous client: $e');
+        }
+      }
+
       final String clientId = '${_clientId}_${DateTime.now().millisecondsSinceEpoch}';
+      _client = MqttServerClient.withPort(_broker, clientId, port);
       
-      _client = MqttServerClient.withPort(_broker, clientId, _port);
-      _client!.logging(on: true);
+      // Basic configuration
+      _client!.logging(on: false); // Disable verbose logging to reduce noise
       _client!.setProtocolV311();
-      _client!.keepAlivePeriod = 30;
-      _client!.connectTimeoutPeriod = 10000;
+      _client!.keepAlivePeriod = 60; // Longer keep alive
+      _client!.connectTimeoutPeriod = 15000; // 15 second timeout
       _client!.autoReconnect = true;
-      _client!.secure = true;
+      _client!.resubscribeOnAutoReconnect = true;
+      
+      // Security configuration
+      _client!.secure = secure;
+      if (secure) {
+        _client!.securityContext = SecurityContext.defaultContext;
+        _client!.onBadCertificate = (X509Certificate cert) => true; // Accept all certificates for testing
+      }
 
       // Setup callbacks
       _client!.onConnected = () {
-        print('✅ MQTT: Connected successfully');
+        print('✅ MQTT: Connected successfully to $_broker:$port');
         _isConnected = true;
         _subscribeToTopics();
       };
 
       _client!.onDisconnected = () {
-        print('🔌 MQTT: Disconnected');
+        print('🔌 MQTT: Disconnected from $_broker:$port');
         _isConnected = false;
       };
 
       _client!.onAutoReconnect = () {
-        print('🔄 MQTT: Auto-reconnect triggered');
-        _isConnected = true;
-        _subscribeToTopics();
+        print('🔄 MQTT: Auto-reconnect triggered for $_broker:$port');
       };
 
       _client!.onAutoReconnected = () {
-        print('✅ MQTT: Auto-reconnected successfully');
+        print('✅ MQTT: Auto-reconnected successfully to $_broker:$port');
         _isConnected = true;
         _subscribeToTopics();
       };
 
-      // Connect message
+      // Connection message with authentication
       final connMessage = MqttConnectMessage()
           .withClientIdentifier(clientId)
           .authenticateAs(_username, _password)
           .withWillTopic('greenhouse/status/app')
-          .withWillMessage('Disconnected')
+          .withWillMessage('Flutter App Disconnected')
           .startClean()
           .withWillQos(MqttQos.atLeastOnce);
 
       _client!.connectionMessage = connMessage;
 
+      // Attempt connection with timeout
       try {
-        await _client!.connect();
-        
+        print('⏳ Connecting to $_broker:$port...');
+        final connectFuture = _client!.connect();
+        await connectFuture.timeout(Duration(seconds: 15));
+
         if (_client!.connectionStatus!.state == MqttConnectionState.connected) {
-          print('✅ MQTT: Connection established');
+          print('✅ MQTT: Connection established to $_broker:$port');
           _isConnected = true;
           _setupMessageListener();
-          return true;
+          await _subscribeToTopics();
+          
+          // Test connection with a ping
+          bool pingSuccess = await _testConnection();
+          if (pingSuccess) {
+            print('✅ MQTT: Connection test successful');
+            return true;
+          } else {
+            print('⚠️ MQTT: Connection test failed, but connection seems stable');
+            return true; // Still return true as basic connection works
+          }
         } else {
-          print('❌ MQTT: Connection failed - ${_client!.connectionStatus!.returnCode}');
+          print('❌ MQTT: Connection failed - ${_client!.connectionStatus}');
           return false;
         }
+      } on TimeoutException catch (e) {
+        print('❌ MQTT: Connection timeout - $e');
+        _client!.disconnect();
+        return false;
       } on NoConnectionException catch (e) {
         print('❌ MQTT: No connection exception - $e');
         _client!.disconnect();
@@ -123,7 +199,31 @@ class MqttService {
         return false;
       }
     } catch (e) {
-      print('❌ MQTT: Preparation error - $e');
+      print('❌ MQTT: Connection attempt failed with $configDescription - $e');
+      if (_client != null) {
+        try {
+          _client!.disconnect();
+        } catch (disconnectError) {
+          print('⚠️ Error during cleanup disconnect: $disconnectError');
+        }
+      }
+      return false;
+    }
+  }
+
+  Future<bool> _testConnection() async {
+    try {
+      // Test connection with a simple publish
+      final testData = {
+        'test': true,
+        'timestamp': DateTime.now().toIso8601String(),
+        'source': 'connection_test',
+        'client_id': _client?.clientIdentifier ?? 'unknown',
+      };
+
+      return await publishToTopic('greenhouse/test/connection', testData);
+    } catch (e) {
+      print('❌ Connection test failed: $e');
       return false;
     }
   }
@@ -132,7 +232,7 @@ class MqttService {
     try {
       // Cancel previous subscription if exists
       _messageSubscription?.cancel();
-      
+
       if (_client?.updates != null) {
         _messageSubscription = _client!.updates!.listen(
           (List<MqttReceivedMessage<MqttMessage?>>? c) {
@@ -143,7 +243,7 @@ class MqttService {
           },
           onDone: () {
             print('📝 MQTT message listener done');
-          }
+          },
         );
       }
     } catch (e) {
@@ -156,38 +256,39 @@ class MqttService {
       if (c != null && c.isNotEmpty) {
         final MqttPublishMessage recMess = c[0].payload as MqttPublishMessage;
         final String topic = c[0].topic;
-        final String message = MqttPublishPayload.bytesToStringAsString(recMess.payload.message);
-        
+        final String message = MqttPublishPayload.bytesToStringAsString(
+          recMess.payload.message,
+        );
+
         print('📨 MQTT: Received from $topic: $message');
-        
+
         // Handle empty or invalid messages
         if (message.trim().isEmpty) {
           print('⚠️ MQTT: Empty message received from $topic');
           return;
         }
-        
+
         try {
           // Try to parse as JSON
           var jsonData = jsonDecode(message) as Map<String, dynamic>;
-          
+
           // Add topic and timestamp info
           jsonData['topic'] = topic;
           jsonData['received_at'] = DateTime.now().toIso8601String();
-          
-          // ENHANCED: If this is a pump control command, convert it to status format
+
+          // If this is a pump control command, convert it to status format
           if (topic == _pumpControlTopic) {
             jsonData = _convertControlToStatus(jsonData);
           }
-          
+
           // Safe add to stream
           _safeAddToStream(jsonData);
-          
+
           print('✅ MQTT: Successfully parsed JSON from $topic');
-          
         } catch (jsonError) {
           print('⚠️ MQTT: Message is not valid JSON, treating as raw text');
           print('Raw message: $message');
-          
+
           // Handle non-JSON messages
           final rawData = <String, dynamic>{
             'topic': topic,
@@ -195,18 +296,18 @@ class MqttService {
             'message_type': 'text',
             'received_at': DateTime.now().toIso8601String(),
           };
-          
+
           // Try to extract simple key-value pairs if it looks like them
           if (message.contains('=') || message.contains(':')) {
             rawData['parsed_attempt'] = _tryParseSimpleFormat(message);
           }
-          
+
           _safeAddToStream(rawData);
         }
       }
     } catch (e) {
       print('❌ Error handling MQTT message: $e');
-      
+
       // Add error info to stream for debugging
       final errorData = <String, dynamic>{
         'error': true,
@@ -214,12 +315,11 @@ class MqttService {
         'error_type': 'message_handling_error',
         'timestamp': DateTime.now().toIso8601String(),
       };
-      
+
       _safeAddToStream(errorData);
     }
   }
 
-  // ENHANCED: Convert pump control command to status format (sama seperti text 2)
   Map<String, dynamic> _convertControlToStatus(Map<String, dynamic> controlData) {
     // Extract the action and convert to is_active
     bool isActive = false;
@@ -227,24 +327,23 @@ class MqttService {
       final action = controlData['action'].toString().toLowerCase();
       isActive = action == 'on' || action == 'start' || action == 'activate';
     }
-    
+
     // Create status format that provider expects
     final statusData = {
       'device': controlData['device'] ?? 'water_pump',
-      'is_active': isActive, // Use is_active instead of action
+      'is_active': isActive,
       'timestamp': controlData['timestamp'] ?? DateTime.now().toIso8601String(),
       'source': controlData['source'] ?? 'mqtt_service',
       'command_id': controlData['command_id'] ?? DateTime.now().millisecondsSinceEpoch.toString(),
-      'topic': _pumpStatusTopic, // Change topic to status topic
+      'topic': _pumpStatusTopic,
     };
-    
+
     return statusData;
   }
 
-  // Helper method untuk parse simple format messages
   Map<String, dynamic> _tryParseSimpleFormat(String message) {
     final Map<String, dynamic> result = {};
-    
+
     try {
       // Handle key=value format
       if (message.contains('=')) {
@@ -254,7 +353,7 @@ class MqttService {
           if (keyValue.length == 2) {
             String key = keyValue[0].trim();
             String value = keyValue[1].trim();
-            
+
             // Try to convert to appropriate type
             if (double.tryParse(value) != null) {
               result[key] = double.parse(value);
@@ -266,7 +365,6 @@ class MqttService {
           }
         }
       }
-      
       // Handle key:value format
       else if (message.contains(':')) {
         final pairs = message.split(',');
@@ -275,7 +373,7 @@ class MqttService {
           if (keyValue.length == 2) {
             String key = keyValue[0].trim().replaceAll('"', '');
             String value = keyValue[1].trim().replaceAll('"', '');
-            
+
             // Try to convert to appropriate type
             if (double.tryParse(value) != null) {
               result[key] = double.parse(value);
@@ -291,29 +389,39 @@ class MqttService {
       print('❌ Error parsing simple format: $e');
       result['parse_error'] = e.toString();
     }
-    
+
     return result;
   }
 
-  void _subscribeToTopics() {
+  Future<void> _subscribeToTopics() async {
     try {
       if (_client != null && isConnected) {
-        _client!.subscribe('greenhouse/sensors/soil', MqttQos.atMostOnce);
-        _client!.subscribe('greenhouse/sensors/+', MqttQos.atMostOnce);
-        _client!.subscribe('greenhouse/status/+', MqttQos.atMostOnce);
-        _client!.subscribe(_pumpStatusTopic, MqttQos.atMostOnce);
-        
-        // ENHANCED: Also subscribe to control topic to catch our own commands
-        _client!.subscribe(_pumpControlTopic, MqttQos.atMostOnce);
-        
-        print('✅ MQTT: Subscribed to all topics');
+        // Subscribe to topics with retry mechanism
+        final topics = [
+          'greenhouse/sensors/soil',
+          'greenhouse/sensors/+',
+          'greenhouse/status/+',
+          _pumpStatusTopic,
+          _pumpControlTopic,
+        ];
+
+        for (String topic in topics) {
+          try {
+            _client!.subscribe(topic, MqttQos.atMostOnce);
+            print('✅ Subscribed to: $topic');
+            await Future.delayed(Duration(milliseconds: 100)); // Small delay between subscriptions
+          } catch (e) {
+            print('❌ Failed to subscribe to $topic: $e');
+          }
+        }
+
+        print('✅ MQTT: Topic subscription completed');
       }
     } catch (e) {
       print('❌ MQTT subscription error: $e');
     }
   }
 
-  // ENHANCED: Method khusus untuk kontrol pump dengan dual publish - sama seperti text 2
   Future<bool> controlPump(bool activate) async {
     try {
       if (!isConnected) {
@@ -323,6 +431,8 @@ class MqttService {
 
       final timestamp = DateTime.now().toIso8601String();
       final commandId = DateTime.now().millisecondsSinceEpoch.toString();
+
+      print('🔧 Controlling pump: ${activate ? 'ON' : 'OFF'}');
 
       // 1. Send control command (original format)
       final controlMessage = {
@@ -335,11 +445,11 @@ class MqttService {
 
       final controlJson = jsonEncode(controlMessage);
       bool controlSuccess = await publishMessage(_pumpControlTopic, controlJson);
-      
-      // 2. ENHANCED: Also send status message (provider-friendly format)
+
+      // 2. Also send status message (provider-friendly format)
       final statusMessage = {
         'device': 'water_pump',
-        'is_active': activate, // Provider expects this format
+        'is_active': activate,
         'status': activate ? 'on' : 'off',
         'timestamp': timestamp,
         'source': 'flutter_app',
@@ -348,22 +458,20 @@ class MqttService {
 
       final statusJson = jsonEncode(statusMessage);
       bool statusSuccess = await publishMessage(_pumpStatusTopic, statusJson);
-      
+
       if (controlSuccess && statusSuccess) {
         print('✅ Both control and status messages published');
         return true;
       } else {
         print('⚠️ Partial success - Control: $controlSuccess, Status: $statusSuccess');
-        return controlSuccess || statusSuccess; // At least one succeeded
+        return controlSuccess || statusSuccess;
       }
-      
     } catch (e) {
       print('❌ Error controlling pump: $e');
       return false;
     }
   }
 
-  // Method untuk publish message yang diperlukan oleh controlPump
   Future<bool> publishMessage(String topic, String message) async {
     try {
       if (!isConnected) {
@@ -375,13 +483,11 @@ class MqttService {
 
       // Publish dengan QoS level 1 untuk memastikan delivery
       _client!.publishMessage(topic, MqttQos.atLeastOnce, builder.payload!);
-      
+
       print('✅ Message published successfully to $topic');
       return true;
-      
-    } catch (e, stackTrace) {
+    } catch (e) {
       print('❌ Error publishing message: $e');
-      print('Stack trace: $stackTrace');
       return false;
     }
   }
@@ -414,7 +520,7 @@ class MqttService {
           bool reconnected = await prepareMqttClient();
           if (!reconnected) {
             if (attempt < maxRetries) {
-              await Future.delayed(Duration(seconds: attempt));
+              await Future.delayed(Duration(seconds: attempt * 2));
               continue;
             }
             return false;
@@ -432,7 +538,7 @@ class MqttService {
         if (attempt == maxRetries) {
           return false;
         }
-        await Future.delayed(Duration(seconds: attempt));
+        await Future.delayed(Duration(seconds: attempt * 2));
       }
     }
     return false;
@@ -444,6 +550,7 @@ class MqttService {
         'test': true,
         'timestamp': DateTime.now().toIso8601String(),
         'source': 'test_function',
+        'connection_info': getConnectionInfo(),
       };
 
       return await publishToTopic('greenhouse/test/connection', testData);
@@ -471,18 +578,18 @@ class MqttService {
   Future<void> disconnect() async {
     try {
       print('🔌 MQTT: Disconnecting...');
-      
+
       _isConnected = false;
-      
+
       // Cancel message subscription first
       _messageSubscription?.cancel();
       _messageSubscription = null;
-      
+
       // Disconnect client
       if (_client != null) {
         _client!.disconnect();
       }
-      
+
       print('✅ MQTT: Disconnected successfully');
     } catch (e) {
       print('❌ MQTT disconnect error: $e');
@@ -490,7 +597,7 @@ class MqttService {
   }
 
   bool get isConnected {
-    return _client?.connectionStatus?.state == MqttConnectionState.connected;
+    return _client?.connectionStatus?.state == MqttConnectionState.connected && _isConnected;
   }
 
   // Method untuk publish sensor data
@@ -556,6 +663,7 @@ class MqttService {
         'status': status,
         'timestamp': DateTime.now().toIso8601String(),
         'source': 'mobile_app',
+        ...?additionalData,
       };
 
       return await publishToTopic('greenhouse/status/app', statusData);
@@ -573,6 +681,7 @@ class MqttService {
         'command': command,
         'timestamp': DateTime.now().toIso8601String(),
         'source': 'mobile_app',
+        ...?params,
       };
 
       return await publishToTopic('greenhouse/commands/$deviceId', commandData);
@@ -613,28 +722,47 @@ class MqttService {
       'connected': isConnected,
       'client_id': _client?.clientIdentifier ?? 'unknown',
       'server_host': _client?.server ?? 'unknown',
+      'server_port': _client?.port ?? 0,
       'connection_state': _client?.connectionStatus?.state.toString() ?? 'unknown',
       'last_ping': DateTime.now().toIso8601String(),
+      'auto_reconnect': _client?.autoReconnect ?? false,
     };
+  }
+
+  // Method untuk force reconnect
+  Future<bool> forceReconnect() async {
+    print('🔄 Force reconnecting MQTT...');
+    
+    try {
+      // Disconnect first
+      await disconnect();
+      await Future.delayed(Duration(seconds: 2));
+      
+      // Try to reconnect
+      return await prepareMqttClient();
+    } catch (e) {
+      print('❌ Force reconnect failed: $e');
+      return false;
+    }
   }
 
   void dispose() {
     try {
       print('🗑️ MQTT: Disposing service...');
-      
+
       // Cancel subscription
       _messageSubscription?.cancel();
       _messageSubscription = null;
-      
+
       // Disconnect client
       disconnect();
-      
+
       // Close and nullify StreamController
       if (_dataController != null && !_dataController!.isClosed) {
         _dataController!.close();
       }
       _dataController = null;
-      
+
       print('✅ MQTT: Service disposed successfully');
     } catch (e) {
       print('❌ MQTT dispose error: $e');

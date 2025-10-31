@@ -1,14 +1,14 @@
 {
   "project_info": {
-    "project_number": "887967819574",
-    "firebase_url": "https://drip-flush-default-rtdb.asia-southeast1.firebasedatabase.app",
-    "project_id": "drip-flush",
-    "storage_bucket": "drip-flush.firebasestorage.app"
+    "project_number": "616264671293",
+    "firebase_url": "https://drip-flush-59b6e-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "project_id": "drip-flush-59b6e",
+    "storage_bucket": "drip-flush-59b6e.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:887967819574:android:657bfef5789418d14c3597",
+        "mobilesdk_app_id": "1:616264671293:android:aa02c8347f77acc27c0a54",
         "android_client_info": {
           "package_name": "com.example.drip_flush"
         }
@@ -16,7 +16,7 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyBVCopMjdu0MRlx-pNJNSiOSMYJrwFR5Pw"
+          "current_key": "AIzaSyAYHMdGeqXYH3Vl9eWe_dPevLONZnV2zTg"
         }
       ],
       "services": {

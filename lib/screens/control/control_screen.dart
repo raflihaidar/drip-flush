@@ -1,11 +1,10 @@
 import 'package:flutter/material.dart';
-import 'dart:convert';
 import 'dart:async';
 import 'package:provider/provider.dart';
 import '../../core/constants/app_colors.dart';
 import '../../widgets/common/custom_card.dart';
 import '../../services/mqtt_service.dart';
-import '../../providers/greenhouse_provider.dart';  // Import provider
+import '../../providers/greenhouse_provider.dart';
 
 class ControlScreen extends StatefulWidget {
   @override
@@ -13,7 +12,6 @@ class ControlScreen extends StatefulWidget {
 }
 
 class _ControlScreenState extends State<ControlScreen> with TickerProviderStateMixin {
-  // Remove local pump status - akan ambil dari provider
   double wateringDuration = 5.0;
   bool isSendingCommand = false;
   String _lastPumpAction = 'Never';
@@ -31,11 +29,9 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
   void initState() {
     super.initState();
     _setupAnimations();
-    _setupAutoRefresh();
-    _initializeMqtt(); // SAMA SEPERTI HOME SCREEN
-    _listenToMqttMessages(); // SAMA SEPERTI HOME SCREEN
+    _initializeMqtt();
+    _listenToMqttMessages();
     
-    // Load initial pump status from Firebase via provider
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadInitialDataFromProvider();
     });
@@ -56,51 +52,62 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
   }
 
   void _setupAutoRefresh() {
-    // Auto refresh every 30 seconds - SAMA SEPERTI HOME
+    // Setup auto refresh HANYA setelah initial load selesai
     _autoRefreshTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
       if (mounted && _mqttConnected) {
-        // Optional: refresh pump status periodically dari provider
-        print('🔄 Auto refresh - checking pump status from provider');
+        print('🔄 Auto refresh - syncing with Firebase');
         _syncWithProvider();
       }
     });
   }
 
-  // Method untuk load initial data dari provider
-  void _loadInitialDataFromProvider() {
-    final provider = Provider.of<GreenhouseProvider>(context, listen: false);
-    
-    // Update UI berdasarkan data dari provider
-    if (provider.pumpStatus != null) {
-      print('📊 Loading initial pump status from provider: ${provider.currentPumpStatus}');
+  Future<void> _loadInitialDataFromProvider() async {
+    try {
+      final provider = Provider.of<GreenhouseProvider>(context, listen: false);
       
-      // Update last action time jika ada data
+      print('🔄 Loading initial data from Firebase...');
+      
+      // Force refresh dari Firebase untuk memastikan data terbaru
+      await provider.refreshData();
+      
+      // Wait sebentar untuk memastikan data loaded
+      await Future.delayed(Duration(milliseconds: 500));
+      
+      if (mounted) {
+        // Update UI berdasarkan data Firebase yang fresh
+        _syncWithProvider();
+        
+        // Setup auto refresh setelah initial load selesai
+        _setupAutoRefresh();
+        
+        print('✅ Initial data loaded successfully');
+        print('📊 Current pump status from Firebase: ${provider.isPumpActive}');
+      }
+      
+    } catch (e) {
+      print('❌ Error loading initial data: $e');
+      if (mounted) {
+        _showStatusMessage('⚠️ Failed to load latest status from server', isSuccess: false);
+      }
+    }
+  }
+
+  void _syncWithProvider() {
+    try {
+      final provider = Provider.of<GreenhouseProvider>(context, listen: false);
+      
       if (provider.lastPumpUpdate != null) {
         setState(() {
           _lastPumpAction = provider.lastPumpUpdate!.toString().substring(11, 16);
         });
       }
-    }
-    
-    // Force refresh provider data
-    provider.refreshData();
-  }
-
-  // Method untuk sync dengan provider
-  void _syncWithProvider() {
-    final provider = Provider.of<GreenhouseProvider>(context, listen: false);
-    
-    if (provider.pumpStatus != null && provider.lastPumpUpdate != null) {
-      setState(() {
-        _lastPumpAction = provider.lastPumpUpdate!.toString().substring(11, 16);
-      });
+    } catch (e) {
+      print('❌ Error syncing with provider: $e');
     }
   }
 
-  // Method MQTT initialization SAMA PERSIS SEPERTI HOME SCREEN
   Future<void> _initializeMqtt() async {
     try {
-      // Create fresh instance setiap kali
       _mqttService = MqttService();
       
       bool connected = await _mqttService!.prepareMqttClient();
@@ -120,14 +127,11 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
     }
   }
 
-  // Method listen MQTT messages SAMA PERSIS SEPERTI HOME SCREEN
   void _listenToMqttMessages() {
     if (_mqttService != null) {
       _mqttService!.dataStream.listen(
         (data) {
           print('📨 Control received MQTT data: $data');
-          
-          // Handle different data formats
           _processIncomingMqttData(data);
         },
         onError: (error) {
@@ -137,14 +141,11 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
     }
   }
 
-  // Method untuk process incoming MQTT data - FOKUS PADA PUMP STATUS
   void _processIncomingMqttData(Map<String, dynamic> data) {
     try {
-      // Handle pump status - UPDATE LAST ACTION TIME SAJA
       bool pumpStatusChanged = false;
       
       if (data.containsKey('device') && data['device'] == 'water_pump') {
-        // Handle pump control response
         if (data.containsKey('action')) {
           final action = data['action'].toString().toLowerCase();
           final isActive = action == 'on' || action == 'start' || action == 'activate';
@@ -154,7 +155,6 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
         }
       }
       
-      // Handle pump status dari topic pump/status
       if (data.containsKey('is_active')) {
         final isActive = data['is_active'];
         if (isActive is bool) {
@@ -163,18 +163,15 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
         }
       }
       
-      // Handle topic-based pump status
       if (data.containsKey('topic')) {
         final topic = data['topic'].toString();
         
-        // Jika dari pump control topic
         if (topic.contains('pump/control') || topic.contains('control/pump')) {
           if (data.containsKey('action')) {
             pumpStatusChanged = true;
           }
         }
         
-        // Jika dari pump status topic
         if (topic.contains('pump/status')) {
           if (data.containsKey('is_active')) {
             pumpStatusChanged = true;
@@ -182,14 +179,17 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
         }
       }
       
-      // Update last action time jika ada perubahan status pump
+      // PERBAIKAN: Jika ada perubahan dari MQTT, sync dengan Firebase
       if (pumpStatusChanged && mounted) {
         setState(() {
           _lastPumpAction = DateTime.now().toString().substring(11, 16);
         });
+        
+        // Force refresh provider untuk sync dengan Firebase
+        final provider = Provider.of<GreenhouseProvider>(context, listen: false);
+        provider.refreshData();
       }
       
-      // Handle error messages
       if (data.containsKey('error') && data['error'] == true) {
         final errorMsg = data['error_message'] ?? 'Unknown MQTT error';
         print('❌ MQTT Error received in Control: $errorMsg');
@@ -201,7 +201,6 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
     }
   }
 
-  // Method reconnect MQTT SAMA PERSIS SEPERTI HOME SCREEN
   Future<void> _reconnectMqtt() async {
     if (_isConnecting) return;
     
@@ -210,10 +209,7 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
     });
     
     try {
-      // Dispose old instance first
       _mqttService?.dispose();
-      
-      // Create fresh instance
       _mqttService = MqttService();
       
       bool connected = await _mqttService!.prepareMqttClient();
@@ -222,7 +218,6 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
           _mqttConnected = connected;
         });
         
-        // Setup listener lagi setelah reconnect
         if (connected) {
           _listenToMqttMessages();
         }
@@ -245,7 +240,7 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
     }
   }
 
-  // IMPROVED: Method utama untuk mengirim perintah pump - GUNAKAN PROVIDER
+  // PERBAIKAN: Method untuk send pump command dengan Firebase sync yang lebih robust
   Future<void> _sendPumpCommand(bool activate) async {
     if (!_mqttConnected) {
       _showStatusMessage('❌ MQTT not connected. Tap refresh to reconnect.', isSuccess: false);
@@ -262,13 +257,20 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
     });
 
     try {
-      print('💧 Attempting to control pump via provider: ${activate ? "ON" : "OFF"}');
+      print('💧 Sending pump control command: ${activate ? "ON" : "OFF"}');
       
-      // GUNAKAN PROVIDER untuk control pump (ini akan sync dengan Firebase)
       final provider = Provider.of<GreenhouseProvider>(context, listen: false);
+      
+      // PERBAIKAN: Kirim command dan tunggu konfirmasi
       await provider.controlPump(activate);
       
-      print('✅ Pump control command sent via provider successfully');
+      // PERBAIKAN: Tunggu sebentar untuk memastikan data tersimpan di Firebase
+      await Future.delayed(Duration(milliseconds: 1000));
+      
+      // PERBAIKAN: Force refresh untuk memastikan status terbaru
+      await provider.refreshData();
+      
+      print('✅ Pump control command completed successfully');
       _showStatusMessage(
         activate ? '💧 Pump activated successfully!' : '⏹️ Pump deactivated successfully!',
         isSuccess: true,
@@ -282,7 +284,7 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
       }
       
     } catch (e) {
-      print('❌ Failed to send pump command via provider: $e');
+      print('❌ Failed to send pump command: $e');
       
       _showStatusMessage(
         '❌ Failed to send command to pump: ${e.toString()}',
@@ -297,154 +299,7 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
     }
   }
 
-  // Method alternatif dengan custom message - UNTUK TESTING
-  Future<void> _sendCustomPumpCommand(bool activate) async {
-    if (!_mqttConnected) {
-      _showStatusMessage('❌ MQTT not connected', isSuccess: false);
-      return;
-    }
-
-    setState(() {
-      isSendingCommand = true;
-    });
-
-    try {
-      final pumpCommand = {
-        'device': 'water_pump',
-        'action': activate ? 'on' : 'off',
-        'timestamp': DateTime.now().toIso8601String(),
-        'source': 'control_app',
-        'user_initiated': true,
-        'command_id': DateTime.now().millisecondsSinceEpoch.toString(),
-        'duration': wateringDuration.toInt(),
-      };
-
-      // Menggunakan publishToTopic method
-      bool success = await _mqttService!.publishToTopic(
-        'greenhouse/control/pump', 
-        pumpCommand
-      );
-      
-      if (success) {
-        print('📤 Custom pump command sent: $pumpCommand');
-        
-        _showStatusMessage(
-          activate ? '💧 Custom pump command sent!' : '⏹️ Custom stop command sent!',
-          isSuccess: true,
-        );
-        
-        // Update last action time
-        if (mounted) {
-          setState(() {
-            _lastPumpAction = DateTime.now().toString().substring(11, 16);
-          });
-        }
-      } else {
-        throw Exception('Custom publish operation failed');
-      }
-      
-    } catch (e) {
-      print('❌ Failed to send custom pump command: $e');
-      
-      _showStatusMessage(
-        '❌ Failed to send custom command: ${e.toString()}',
-        isSuccess: false,
-      );
-    } finally {
-      if (mounted) {
-        setState(() {
-          isSendingCommand = false;
-        });
-      }
-    }
-  }
-
-  // Method dengan retry mechanism - UNTUK TESTING
-  Future<void> _sendPumpCommandWithRetry(bool activate) async {
-    if (!_mqttConnected) {
-      _showStatusMessage('❌ MQTT not connected', isSuccess: false);
-      return;
-    }
-
-    setState(() {
-      isSendingCommand = true;
-    });
-
-    try {
-      final pumpCommand = {
-        'device': 'water_pump',
-        'action': activate ? 'on' : 'off',
-        'timestamp': DateTime.now().toIso8601String(),
-        'source': 'control_app',
-        'retry_enabled': true,
-        'command_id': DateTime.now().millisecondsSinceEpoch.toString(),
-      };
-
-      final jsonMessage = jsonEncode(pumpCommand);
-      
-      // Gunakan publishMessageWithRetry untuk reliability
-      bool success = await _mqttService!.publishMessageWithRetry(
-        'greenhouse/control/pump', 
-        jsonMessage,
-        maxRetries: 3
-      );
-      
-      if (success) {
-        _showStatusMessage(
-          activate ? '💧 Pump activated (with retry)!' : '⏹️ Pump deactivated (with retry)!',
-          isSuccess: true,
-        );
-        
-        // Update last action time
-        if (mounted) {
-          setState(() {
-            _lastPumpAction = DateTime.now().toString().substring(11, 16);
-          });
-        }
-      } else {
-        throw Exception('Failed after multiple retry attempts');
-      }
-      
-    } catch (e) {
-      print('❌ Failed to send pump command with retry: $e');
-      
-      _showStatusMessage(
-        '❌ Failed to send command after retries',
-        isSuccess: false,
-      );
-    } finally {
-      if (mounted) {
-        setState(() {
-          isSendingCommand = false;
-        });
-      }
-    }
-  }
-
-  // Method untuk test connection
-  Future<void> _testMqttConnection() async {
-    setState(() {
-      isSendingCommand = true;
-    });
-
-    try {
-      bool success = await _mqttService!.testPublishWithConfirmation();
-      
-      _showStatusMessage(
-        success ? '✅ MQTT test successful!' : '❌ MQTT test failed!',
-        isSuccess: success,
-      );
-      
-    } catch (e) {
-      _showStatusMessage('❌ Test failed: $e', isSuccess: false);
-    } finally {
-      setState(() {
-        isSendingCommand = false;
-      });
-    }
-  }
-
-  // Manual refresh function SAMA SEPERTI HOME SCREEN
+  // PERBAIKAN: Manual refresh yang lebih comprehensive
   Future<void> _refreshData() async {
     if (_isRefreshing) return;
     
@@ -453,20 +308,28 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
     });
     
     try {
+      print('🔄 Manual refresh started...');
+      
       // Jika MQTT tidak connected, coba reconnect dulu
       if (!_mqttConnected) {
         await _reconnectMqtt();
       }
       
-      // Refresh provider data
+      // PERBAIKAN: Force refresh Firebase data
       final provider = Provider.of<GreenhouseProvider>(context, listen: false);
       await provider.refreshData();
+      
+      // Wait sebentar untuk memastikan data loaded
+      await Future.delayed(Duration(milliseconds: 500));
       
       // Sync local state dengan provider
       _syncWithProvider();
       
-      _showStatusMessage('🔄 Control system refreshed successfully', isSuccess: true);
+      print('✅ Manual refresh completed');
+      _showStatusMessage('🔄 System refreshed successfully', isSuccess: true);
+      
     } catch (e) {
+      print('❌ Manual refresh failed: $e');
       _showStatusMessage('❌ Refresh failed: $e', isSuccess: false);
     } finally {
       if (mounted) {
@@ -500,7 +363,7 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
   void dispose() {
     _autoRefreshTimer?.cancel();
     _animationController.dispose();
-    _mqttService?.dispose(); // Dispose MQTT service SAMA SEPERTI HOME SCREEN
+    _mqttService?.dispose();
     super.dispose();
   }
 
@@ -514,8 +377,6 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _buildHeader(),
-              SizedBox(height: 24),
-              _buildConnectionStatus(),
               SizedBox(height: 24),
               _buildPumpControl(),
               SizedBox(height: 24),
@@ -540,7 +401,6 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
             ),
           ),
         ),
-        // Manual refresh button dengan reconnect capability SAMA SEPERTI HOME
         GestureDetector(
           onTap: (_isRefreshing || _isConnecting) ? null : _refreshData,
           child: Container(
@@ -648,7 +508,6 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
   Widget _buildPumpControl() {
     return Consumer<GreenhouseProvider>(
       builder: (context, provider, child) {
-        // Ambil status pump dari provider (dari Firebase)
         final isPumpActive = provider.isPumpActive ?? false;
         
         return CustomCard(
@@ -672,27 +531,49 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
                     ),
                   ),
                   Spacer(),
-                  // Firebase sync indicator
+                  // PERBAIKAN: Tampilkan status sync Firebase
                   if (provider.isLoading)
-                    SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
+                    Row(
+                      children: [
+                        SizedBox(
+                          width: 12,
+                          height: 12,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                        SizedBox(width: 4),
+                        Text(
+                          'Syncing...',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: Colors.grey,
+                          ),
+                        ),
+                      ],
                     )
                   else
-                    Icon(
-                      Icons.cloud_done,
-                      color: Colors.green,
-                      size: 16,
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.cloud_done,
+                          color: Colors.green,
+                          size: 14,
+                        ),
+                        SizedBox(width: 4),
+                        Text(
+                          'Synced',
+                          style: TextStyle(
+                            fontSize: 10,
+                            color: Colors.green,
+                          ),
+                        ),
+                      ],
                     ),
                 ],
               ),
               SizedBox(height: 32),
               
-              // Pump Status and Control
               Row(
                 children: [
-                  // Status Info
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -764,14 +645,14 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
                               Icon(
                                 Icons.cloud,
                                 size: 16,
-                                color: AppColors.textSecondary,
+                                color: Colors.green,
                               ),
                               SizedBox(width: 4),
                               Text(
                                 'Synced with Firebase',
                                 style: TextStyle(
                                   fontSize: 12,
-                                  color: AppColors.textSecondary,
+                                  color: Colors.green,
                                 ),
                               ),
                             ],
@@ -782,7 +663,7 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
                   ),
                   SizedBox(width: 24),
                   
-                  // Round On/Off Button
+                  // Control Button
                   GestureDetector(
                     onTapDown: (_) => _animationController.forward(),
                     onTapUp: (_) => _animationController.reverse(),
@@ -818,7 +699,6 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
                             ),
                             child: Stack(
                               children: [
-                                // Outer ring
                                 Center(
                                   child: Container(
                                     width: 90,
@@ -832,7 +712,6 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
                                     ),
                                   ),
                                 ),
-                                // Inner content
                                 Center(
                                   child: (isSendingCommand || provider.isLoading)
                                     ? CircularProgressIndicator(
@@ -860,7 +739,6 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
                                         ],
                                       ),
                                 ),
-                                // Disabled overlay
                                 if (!_mqttConnected)
                                   Container(
                                     width: 100,
@@ -895,90 +773,10 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
     );
   }
 
-  Widget _buildTestButtons() {
-    return CustomCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Test Functions',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w600,
-              color: AppColors.textPrimary,
-            ),
-          ),
-          SizedBox(height: 16),
-          
-          Row(
-            children: [
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: (_mqttConnected && !isSendingCommand) 
-                    ? _testMqttConnection 
-                    : null,
-                  icon: Icon(Icons.network_check),
-                  label: Text('Test MQTT'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blue,
-                    foregroundColor: Colors.white,
-                    padding: EdgeInsets.symmetric(vertical: 12),
-                  ),
-                ),
-              ),
-              SizedBox(width: 12),
-              Expanded(
-                child: Consumer<GreenhouseProvider>(
-                  builder: (context, provider, child) {
-                    return ElevatedButton.icon(
-                      onPressed: (_mqttConnected && !isSendingCommand) 
-                        ? () => _sendCustomPumpCommand(!(provider.isPumpActive ?? false))
-                        : null,
-                      icon: Icon(Icons.settings),
-                      label: Text('Custom CMD'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.orange,
-                        foregroundColor: Colors.white,
-                        padding: EdgeInsets.symmetric(vertical: 12),
-                      ),
-                    );
-                  },
-                ),
-              ),
-            ],
-          ),
-          
-          SizedBox(height: 12),
-          
-          Consumer<GreenhouseProvider>(
-            builder: (context, provider, child) {
-              return SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  onPressed: (_mqttConnected && !isSendingCommand) 
-                    ? () => _sendPumpCommandWithRetry(!(provider.isPumpActive ?? false))
-                    : null,
-                  icon: Icon(Icons.repeat),
-                  label: Text('Send with Retry Mechanism'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.purple,
-                    foregroundColor: Colors.white,
-                    padding: EdgeInsets.symmetric(vertical: 12),
-                  ),
-                ),
-              );
-            },
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildDeviceStatus() {
     return Consumer<GreenhouseProvider>(
       builder: (context, provider, child) {
         final isPumpActive = provider.isPumpActive ?? false;
-        final isConnectedToFirebase = provider.isConnected;
         
         return CustomCard(
           child: Column(
@@ -1005,12 +803,12 @@ class _ControlScreenState extends State<ControlScreen> with TickerProviderStateM
                 Icons.sensors, 
                 provider.sensorData != null
               ),
-              // _buildStatusItem(
-              //   'MQTT Connection', 
-              //   _mqttConnected ? 'Connected' : 'Disconnected', 
-              //   Icons.wifi, 
-              //   _mqttConnected
-              // ),
+              _buildStatusItem(
+                'Firebase Sync', 
+                provider.isLoading ? 'Syncing...' : 'Connected', 
+                Icons.cloud, 
+                !provider.isLoading
+              ),
               if (provider.errorMessage != null) ...[
                 SizedBox(height: 8),
                 Container(
