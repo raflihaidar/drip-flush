@@ -53,11 +53,12 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyBVCopMjdu0MRlx-pNJNSiOSMYJrwFR5Pw',
-    appId: '1:887967819574:android:657bfef5789418d14c3597',
-    messagingSenderId: '887967819574',
-    projectId: 'drip-flush',
-    databaseURL: 'https://drip-flush-default-rtdb.asia-southeast1.firebasedatabase.app',
-    storageBucket: 'drip-flush.firebasestorage.app',
+    apiKey: 'AIzaSyAYHMdGeqXYH3Vl9eWe_dPevLONZnV2zTg',
+    appId: '1:616264671293:android:aa02c8347f77acc27c0a54',
+    messagingSenderId: '616264671293',
+    projectId: 'drip-flush-59b6e',
+    databaseURL: 'https://drip-flush-59b6e-default-rtdb.asia-southeast1.firebasedatabase.app',
+    storageBucket: 'drip-flush-59b6e.firebasestorage.app',
   );
+
 }

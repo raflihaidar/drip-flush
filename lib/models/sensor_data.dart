@@ -356,7 +356,7 @@ class SoilSensor {
   }
 
   // Convenience getters untuk analisis tanah
-  bool get isOptimal => value >= 1200 && value <= 1300;
+  bool get isOptimal => value >= 1200 && value <= 1800;
 
 String get condition {
   if (!isActive) return 'Inactive';
@@ -364,7 +364,7 @@ String get condition {
 
   if (isOptimal) return 'Optimal';
   if (value < 1200) return 'Dry';
-  if (value > 1300) return 'Too Wet';
+  if (value > 1800) return 'Too Wet';
   return 'Need Attention';
 }
 
